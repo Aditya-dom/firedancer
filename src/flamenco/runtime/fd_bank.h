@@ -747,21 +747,14 @@ fd_banks_new_bank( fd_banks_t * banks,
                    uchar        is_leader );
 
 
-/* fd_banks_get_evictable selects banks according to the current
-   fd_banks eviction policy, marks them prunable, and queues them for
-   pruning.  A bank can be evictable as long as it is not dead or
-   inactive.  The caller is expected to have enough memory to store the
-   bank indices for the evictable set.  The bank indices are written to
-   evictable_idxs_out in no particular order.  The number of banks in
-   the evictable set is written to the evictable_cnt_out pointer.
+/* fd_banks_get_evictable_bank selects the leftmost evictable leaf
+   according to the current fd_banks eviction policy, marks it prunable,
+   queues it for pruning, and returns its bank index.  The root, leader
+   banks, dead banks, inactive banks, and already prunable banks are not
+   evictable.  Returns ULONG_MAX if there is no evictable bank. */
 
-   TODO: In practice this will return some subtree of banks from the
-   banks tree. */
-
-void
-fd_banks_get_evictable( fd_banks_t * banks,
-                        ulong *      evictable_idxs_out,
-                        ulong *      evictable_cnt_out );
+ulong
+fd_banks_get_evictable_bank( fd_banks_t * banks );
 
 /* fd_banks_can_start_bank returns 1 if banks has capacity to clone and
    prepare a child bank.  Epoch-boundary fork pools are checked only when

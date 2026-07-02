@@ -1,4 +1,6 @@
 #include "fd_bank.h"
+#include "../rewards/fd_stake_rewards.h"
+#include "sysvar/fd_sysvar_epoch_schedule.h"
 
 #include <stdlib.h> // ARM64: aligned_alloc(3)
 
@@ -517,8 +519,9 @@ test_bank_evictable( void * mem ) {
      D E F
      |\  |
      I J G
-         |
-         H */
+     ^  / \
+ leader H L(leader)
+   */
 
   fd_bank_t * bank_A = fd_banks_init_bank( banks );
   FD_TEST( bank_A );
@@ -555,25 +558,35 @@ test_bank_evictable( void * mem ) {
   bank_H = fd_banks_clone_from_parent( banks, bank_H->idx );
   FD_TEST( bank_H );
 
-  fd_bank_t * bank_I = fd_banks_new_bank( banks, bank_D->idx, 0L, 0 );
+  fd_bank_t * bank_L = fd_banks_new_bank( banks, bank_G->idx, 0L, 1 );
+  bank_L = fd_banks_clone_from_parent( banks, bank_L->idx );
+  FD_TEST( bank_L );
+  fd_banks_mark_bank_frozen( bank_L );
+
+  fd_bank_t * bank_I = fd_banks_new_bank( banks, bank_D->idx, 0L, 1 );
   bank_I = fd_banks_clone_from_parent( banks, bank_I->idx );
   FD_TEST( bank_I );
+  fd_banks_mark_bank_frozen( bank_I );
 
   fd_bank_t * bank_J = fd_banks_new_bank( banks, bank_D->idx, 0L, 0 );
   bank_J = fd_banks_clone_from_parent( banks, bank_J->idx );
   FD_TEST( bank_J );
+  fd_banks_mark_bank_frozen( bank_J );
 
-  ulong evictable_idxs[32];
-  ulong evictable_cnt = 0UL;
+  ulong evictable_bank_idx = fd_banks_get_evictable_bank( banks );
+  FD_TEST( evictable_bank_idx==bank_J->idx );
 
-  fd_banks_get_evictable( banks, evictable_idxs, &evictable_cnt );
-  FD_TEST( evictable_cnt==5UL );
-
-  FD_TEST( bank_C->state==FD_BANK_STATE_PRUNABLE );
-  FD_TEST( bank_E->state==FD_BANK_STATE_PRUNABLE );
-  FD_TEST( bank_H->state==FD_BANK_STATE_PRUNABLE );
-  FD_TEST( bank_I->state==FD_BANK_STATE_PRUNABLE );
   FD_TEST( bank_J->state==FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_A->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_B->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_C->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_D->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_E->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_F->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_G->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_H->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_I->state!=FD_BANK_STATE_PRUNABLE );
+  FD_TEST( bank_L->state!=FD_BANK_STATE_PRUNABLE );
 }
 
 static void
@@ -768,6 +781,54 @@ test_bank_new_votes_fork_indices( void * mem ) {
   FD_TEST( out[0]==A->new_votes_fork_id );
 
   (void)C_idx;
+  fd_banks_clear( banks );
+}
+
+static void
+test_bank_advance_root_preserves_inherited_stake_rewards( void * mem ) {
+  fd_banks_t * banks = fd_banks_join( fd_banks_new( mem, 16UL, 4UL, 2048UL, 2048UL, 0, 6666UL ) );
+  FD_TEST( banks );
+
+  fd_bank_t * bank_A = fd_banks_init_bank( banks );
+  FD_TEST( bank_A );
+  bank_A->f.epoch_schedule = (fd_epoch_schedule_t) {
+    .slots_per_epoch             = 32UL,
+    .leader_schedule_slot_offset = 32UL,
+    .warmup                      = 0,
+    .first_normal_epoch          = 0UL,
+    .first_normal_slot           = 0UL
+  };
+  bank_A->f.parent_slot = 0UL;
+  bank_A->f.slot        = 32UL;
+  bank_A->refcnt        = 0UL;
+
+  ulong const starting_block_height = 12345UL;
+  uint  const partition_cnt         = 3U;
+  fd_hash_t parent_blockhash = { 0 };
+
+  fd_stake_rewards_t * stake_rewards = fd_bank_stake_rewards_modify( bank_A );
+  uchar fork_idx = fd_stake_rewards_init( stake_rewards,
+                                          fd_slot_to_epoch( &bank_A->f.epoch_schedule, bank_A->f.slot, NULL ),
+                                          &parent_blockhash,
+                                          starting_block_height,
+                                          partition_cnt );
+  bank_A->stake_rewards_fork_id = fork_idx;
+
+  fd_bank_t * bank_B = fd_banks_new_bank( banks, bank_A->idx, 0L, 0 );
+  bank_B = fd_banks_clone_from_parent( banks, bank_B->idx );
+  FD_TEST( bank_B );
+  bank_B->f.slot = 33UL;
+  FD_TEST( bank_B->stake_rewards_fork_id==fork_idx );
+  fd_banks_mark_bank_frozen( bank_B );
+
+  fd_banks_advance_root( banks, bank_B->idx );
+
+  fd_bank_t * new_root = fd_banks_root( banks );
+  FD_TEST( new_root==bank_B );
+  FD_TEST( new_root->stake_rewards_fork_id==fork_idx );
+  FD_TEST( fd_stake_rewards_starting_block_height( stake_rewards, fork_idx )==starting_block_height );
+  FD_TEST( fd_stake_rewards_num_partitions( stake_rewards, fork_idx )==partition_cnt );
+
   fd_banks_clear( banks );
 }
 
@@ -1179,6 +1240,8 @@ main( int argc, char ** argv ) {
   test_bank_new_votes_lifecycle( mem );
 
   test_bank_new_votes_fork_indices( mem );
+
+  test_bank_advance_root_preserves_inherited_stake_rewards( mem );
 
   test_bank_clear( mem );
 

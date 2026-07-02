@@ -441,18 +441,6 @@ publish_slot_dead( fd_replay_tile_t *  ctx,
 }
 
 static void
-publish_drop_bank_ref( fd_replay_tile_t *  ctx,
-                       fd_stem_context_t * stem,
-                       ulong               bank_idx ) {
-  if( FD_UNLIKELY( ctx->replay_out->idx==ULONG_MAX ) ) return;
-
-  fd_replay_drop_bank_ref_t * msg = fd_chunk_to_laddr( ctx->replay_out->mem, ctx->replay_out->chunk );
-  msg->bank_idx = bank_idx;
-  fd_stem_publish( stem, ctx->replay_out->idx, REPLAY_SIG_DROP_BANK_REF, ctx->replay_out->chunk, sizeof(fd_replay_drop_bank_ref_t), 0UL, 0UL, fd_frag_meta_ts_comp( fd_tickcount() ) );
-  ctx->replay_out->chunk = fd_dcache_compact_next( ctx->replay_out->chunk, sizeof(fd_replay_drop_bank_ref_t), ctx->replay_out->chunk0, ctx->replay_out->wmark );
-}
-
-static void
 publish_txn_executed( fd_replay_tile_t *  ctx,
                       fd_stem_context_t * stem,
                       ulong               txn_idx ) {
@@ -1759,6 +1747,7 @@ try_prune_sched( fd_replay_tile_t * ctx ) {
 static int
 try_prune_bank( fd_replay_tile_t * ctx ) {
   fd_banks_prune_cancel_info_t cancel_info[ 1 ];
+
   int pruned = fd_banks_prune_one_bank( ctx->banks, cancel_info );
   switch( pruned ) {
     case 2: { /* pruning bank + cancellation is needed */
@@ -1813,28 +1802,6 @@ try_evict_reasm( fd_replay_tile_t *  ctx,
 }
 
 static int
-try_evict_bank( fd_replay_tile_t *  ctx,
-                fd_stem_context_t * stem FD_PARAM_UNUSED ) {
-
-  if( FD_UNLIKELY( ctx->drop_ref_bank_idx_cnt ) ) {
-    ulong bank_idx = ctx->drop_ref_bank_idxs[ --ctx->drop_ref_bank_idx_cnt ];
-    publish_drop_bank_ref( ctx, stem, bank_idx );
-    return 1;
-  }
-
-  /* Abandon an evictable bank.  As refcnts on said banks are drained,
-     they will be pruned away.  If we are trying to evict banks it is
-     important that no replay is occurring; otherwise, our list of banks
-     to evict will be stale. */
-  if( FD_UNLIKELY( !ctx->evictable_cnt ) ) return 0;
-
-  ulong bank_idx = ctx->evictable_idxs[ --ctx->evictable_cnt ];
-  fd_bank_t * bank = fd_banks_bank_query( ctx->banks, bank_idx );
-  fd_sched_block_abandon( ctx->sched, bank->idx );
-  return 1;
-}
-
-static int
 try_process_fec( fd_replay_tile_t *  ctx,
                  fd_stem_context_t * stem ) {
 
@@ -1864,17 +1831,27 @@ try_process_fec( fd_replay_tile_t *  ctx,
     return 1;
   }
 
-  /* If we need to evict banks, gather the evictable set.  The banks are
-     marked prunable by fd_banks_get_evictable and pruned once refs
+  /* If we need to evict banks, gather one evictable bank.  The bank is
+     marked prunable by fd_banks_get_evictable_bank and pruned once refs
      drain. */
   if( FD_UNLIKELY( evict_banks ) ) {
-    /* TODO:FIXME: make sure that this is correct.  Maybe get evictable
-       should just return 1 bank and we just mark that and any of its
-       children as prunable. */
     FD_LOG_WARNING(( "banks are full and partially executed banks are being evicted" ));
-    fd_banks_get_evictable( ctx->banks, ctx->evictable_idxs, &ctx->evictable_cnt );
-    fd_memcpy( ctx->drop_ref_bank_idxs, ctx->evictable_idxs, ctx->evictable_cnt*sizeof(ulong) );
-    ctx->drop_ref_bank_idx_cnt = ctx->evictable_cnt;
+    ulong evictable_bank_idx = fd_banks_get_evictable_bank( ctx->banks );
+    if( FD_UNLIKELY( evictable_bank_idx==ULONG_MAX ) ) {
+      FD_LOG_WARNING(( "replay has no banks to mark as prunable" ));
+      return 0;
+    }
+
+    /* Send a notification to other tiles to drop a reference to the
+       evictable bank.  The RPC tile is the only tile which holds onto
+       non-rooted banks, non-transiently.
+       TODO:FIXME: make sure this doesn't break stem burst */
+    fd_replay_drop_bank_ref_t * msg = fd_chunk_to_laddr( ctx->replay_out->mem, ctx->replay_out->chunk );
+    fd_sched_block_abandon( ctx->sched, evictable_bank_idx );
+    msg->bank_idx = evictable_bank_idx;
+    fd_stem_publish( stem, ctx->replay_out->idx, REPLAY_SIG_DROP_BANK_REF, ctx->replay_out->chunk, sizeof(fd_replay_drop_bank_ref_t), 0UL, 0UL, fd_frag_meta_ts_comp( fd_tickcount() ) );
+    ctx->replay_out->chunk = fd_dcache_compact_next( ctx->replay_out->chunk, sizeof(fd_replay_drop_bank_ref_t), ctx->replay_out->chunk0, ctx->replay_out->wmark );
+
     return 1;
   }
 
@@ -1904,12 +1881,6 @@ after_credit( fd_replay_tile_t *  ctx,
      be changed without extreme caution. */
 
   if( FD_UNLIKELY( try_evict_reasm( ctx, stem ) ) ) {
-    *charge_busy = 1;
-    *opt_poll_in = 0;
-    return;
-  }
-
-  if( FD_UNLIKELY( try_evict_bank( ctx, stem ) ) ) {
     *charge_busy = 1;
     *opt_poll_in = 0;
     return;
@@ -2613,8 +2584,6 @@ unprivileged_init( fd_topo_t const *      topo,
 
   FD_MGAUGE_SET( REPLAY, BANK_LIVE_MAX, fd_banks_pool_max_cnt( ctx->banks ) );
 
-  ctx->evictable_cnt = 0UL;
-
   ctx->consensus_root_slot = ULONG_MAX;
   ctx->consensus_root      = ctx->initial_block_id;
   ctx->published_root_slot = ULONG_MAX;
@@ -2695,7 +2664,6 @@ unprivileged_init( fd_topo_t const *      topo,
   ctx->reasm = fd_reasm_join( fd_reasm_new( reasm_mem, tile->replay.fec_max, ctx->reasm_seed ) );
   FD_TEST( ctx->reasm );
   ctx->reasm_evicted = NULL;
-  ctx->drop_ref_bank_idx_cnt = 0UL;
 
   ctx->sched = fd_sched_join( fd_sched_new( sched_mem, ctx->rng, tile->replay.sched_depth, tile->replay.max_live_slots, fd_topo_tile_name_cnt( topo, "execrp" ) ) );
   FD_TEST( ctx->sched );

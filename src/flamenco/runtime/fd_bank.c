@@ -853,7 +853,7 @@ fd_banks_advance_root( fd_banks_t * banks,
 
     ulong prev_epoch = fd_slot_to_epoch( &head->f.epoch_schedule, head->f.parent_slot, NULL );
     ulong new_epoch  = fd_slot_to_epoch( &head->f.epoch_schedule, head->f.slot, NULL );
-    if( FD_UNLIKELY( prev_epoch!=new_epoch && head->stake_rewards_fork_id!=UCHAR_MAX ) ) {
+    if( FD_UNLIKELY( prev_epoch!=new_epoch && head->stake_rewards_fork_id!=UCHAR_MAX && head->stake_rewards_fork_id!=new_root->stake_rewards_fork_id ) ) {
       fd_stake_rewards_purge( fd_banks_get_stake_rewards( banks ), head->stake_rewards_fork_id );
     }
     head->stake_rewards_fork_id = UCHAR_MAX;
@@ -1074,6 +1074,9 @@ fd_banks_subtree_mark_prunable( fd_banks_t * banks,
   ulong idxs_cnt = 0UL;
   FD_TEST( bank->state!=FD_BANK_STATE_INACTIVE && bank->state!=FD_BANK_STATE_DEAD );
   bank->state = FD_BANK_STATE_PRUNABLE;
+  /* Child nodes should always be popped off before their parents to
+     enforce invariant that nodes being popped off have no active
+     children nodes. */
   fd_banks_prune_push_head( fd_banks_get_prune_banks_deque( banks ), (fd_bank_idx_seq_t){ .idx = bank->idx, .seq = bank->bank_seq } );
   if( opt_idxs ) opt_idxs[ idxs_cnt ] = bank->idx;
   idxs_cnt++;
@@ -1200,33 +1203,36 @@ fd_banks_mark_bank_frozen( fd_bank_t * bank ) {
   bank->cost_tracker_pool_idx = ULONG_MAX;
 }
 
-static void
+static fd_bank_t *
 fd_banks_get_evictable_private( fd_banks_t * banks,
                                 fd_bank_t *  bank_pool,
-                                ulong       bank_idx,
-                                ulong *     evictable_idxs_out,
-                                ulong *     evictable_cnt_out ) {
-  if( bank_idx==fd_banks_pool_idx_null( bank_pool ) ) return;
+                                ulong        bank_idx ) {
+  if( bank_idx==fd_banks_pool_idx_null( bank_pool ) ) return NULL;
 
   fd_bank_t * bank = fd_banks_pool_ele( bank_pool, bank_idx );
 
-  if( bank->child_idx==fd_banks_pool_idx_null( bank_pool ) ) {
-    if( bank->state!=FD_BANK_STATE_FROZEN && bank->state!=FD_BANK_STATE_DEAD && bank->state!=FD_BANK_STATE_PRUNABLE && !bank->is_leader ) {
-      *evictable_cnt_out += fd_banks_subtree_mark_prunable( banks, bank_pool, bank, evictable_idxs_out+*evictable_cnt_out );
-    }
-  } else {
-    fd_banks_get_evictable_private( banks, bank_pool, bank->child_idx, evictable_idxs_out, evictable_cnt_out );
+  ulong child_idx = bank->child_idx;
+  while( child_idx!=fd_banks_pool_idx_null( bank_pool ) ) {
+    fd_bank_t * evictable = fd_banks_get_evictable_private( banks, bank_pool, child_idx );
+    if( FD_LIKELY( evictable ) ) return evictable;
+    fd_bank_t * child = fd_banks_pool_ele( bank_pool, child_idx );
+    child_idx = child->sibling_idx;
   }
-  fd_banks_get_evictable_private( banks, bank_pool, bank->sibling_idx, evictable_idxs_out, evictable_cnt_out );
+
+  if( bank->idx==banks->root_idx ) return NULL;
+  if( bank->is_leader ) return NULL;
+  if( bank->state==FD_BANK_STATE_INACTIVE || bank->state==FD_BANK_STATE_DEAD || bank->state==FD_BANK_STATE_PRUNABLE ) return NULL;
+  return bank;
 }
 
-void
-fd_banks_get_evictable( fd_banks_t * banks,
-                        ulong *      evictable_idxs_out,
-                        ulong *      evictable_cnt_out ) {
-  *evictable_cnt_out = 0UL;
+ulong
+fd_banks_get_evictable_bank( fd_banks_t * banks ) {
   fd_bank_t * bank_pool = fd_banks_get_bank_pool( banks );
-  fd_banks_get_evictable_private( banks, bank_pool, banks->root_idx, evictable_idxs_out, evictable_cnt_out );
+  fd_bank_t * evictable = fd_banks_get_evictable_private( banks, bank_pool, banks->root_idx );
+  if( FD_UNLIKELY( !evictable ) ) return ULONG_MAX;
+
+  fd_banks_subtree_mark_prunable( banks, bank_pool, evictable, NULL );
+  return evictable->idx;
 }
 
 void

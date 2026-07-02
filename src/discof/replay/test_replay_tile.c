@@ -45,6 +45,8 @@ mock_store_query_fn( fd_store_t *      store FD_PARAM_UNUSED,
 
 static fd_sched_fec_t mock_sched_last_fec;
 static ulong          mock_sched_fec_ingest_cnt;
+static ulong          mock_sched_abandon_cnt;
+static ulong          mock_sched_abandon_idx;
 
 int mock_sched_fec_ingest_fn( fd_sched_t * s FD_PARAM_UNUSED, fd_sched_fec_t * f ) {
   mock_sched_last_fec = *f;
@@ -53,7 +55,10 @@ int mock_sched_fec_ingest_fn( fd_sched_t * s FD_PARAM_UNUSED, fd_sched_fec_t * f
 }
 ulong mock_sched_can_ingest_fn  ( fd_sched_t * s FD_PARAM_UNUSED ) { return ULONG_MAX; }
 int   mock_sched_is_drained_fn  ( fd_sched_t * s FD_PARAM_UNUSED ) { return 1; }
-void  mock_sched_abandon_fn     ( fd_sched_t * s FD_PARAM_UNUSED, ulong i FD_PARAM_UNUSED ) {}
+void  mock_sched_abandon_fn     ( fd_sched_t * s FD_PARAM_UNUSED, ulong i ) {
+  mock_sched_abandon_cnt++;
+  mock_sched_abandon_idx = i;
+}
 void  mock_sched_cancel_fn      ( fd_sched_t * s FD_PARAM_UNUSED, ulong i FD_PARAM_UNUSED ) {}
 ulong mock_sched_pruned_fn      ( fd_sched_t * s FD_PARAM_UNUSED ) { return ULONG_MAX; }
 void  mock_sched_metrics_fn     ( fd_sched_t * s FD_PARAM_UNUSED ) {}
@@ -299,6 +304,8 @@ setup_ctx_with_fork_width( fd_replay_tile_t * ctx,
   mock_txncache_fork_id_next  = 0UL;
   mock_progcache_fork_id_next = 0UL;
   mock_accdb_fork_id_next     = 0U;
+  mock_sched_abandon_cnt      = 0UL;
+  mock_sched_abandon_idx      = ULONG_MAX;
   mock_epoch_boundary_enabled = 0;
   mock_epoch_boundary_fork_cnt = 0UL;
   mock_epoch_boundary_fork_max = ULONG_MAX;
@@ -1134,7 +1141,12 @@ test_epoch_boundary_fork_width_evict( fd_wksp_t * wksp ) {
 
   FD_TEST( !mock_epoch_boundary_overflow );
   FD_TEST( !over->popped );
-  FD_TEST( ctx->evictable_cnt>0UL );
+  FD_TEST( mock_sched_abandon_cnt==1UL );
+  FD_TEST( mock_sched_abandon_idx!=ULONG_MAX );
+
+  fd_bank_t * evicted_bank = fd_banks_bank_query( ctx->banks, mock_sched_abandon_idx );
+  FD_TEST( evicted_bank );
+  FD_TEST( evicted_bank->state==FD_BANK_STATE_PRUNABLE );
 
   FD_LOG_NOTICE(( "pass: test_epoch_boundary_fork_width_evict" ));
 }
