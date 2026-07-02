@@ -151,3 +151,12 @@ src/flamenco/runtime/tests/run_ledger_backtest.sh -l vat-dc-deleted-vote-per -m 
 # vat-activate-10k: VAT PENDING at genesis -> activates @ slot 256 (transition epoch 1); boots epoch-0 (VAT inactive),
 # 10k stake accounts, 2nd vote acct voting across the transition w/ commission 100 (epoch0) -> 0 (epoch1+, max split delta).
 src/flamenco/runtime/tests/run_ledger_backtest.sh -l vat-activate-10k -m 2000000 -e 1020
+# SIMD-0437/0438 (rent lamports_per_byte) + SIMD-0194 (deprecate threshold) + SIMD-0392 (relax_post_exec_min_balance_check);
+# localnet, features activate @ slot 256; boot @ snapshot-200 to replay it OFF+ON across the boundary.
+src/flamenco/runtime/tests/run_ledger_backtest.sh -l rent_relax_only -m 2000000 -e 325
+src/flamenco/runtime/tests/run_ledger_backtest.sh -l rent_lamports_per_byte_6333 -m 2000000 -e 325
+src/flamenco/runtime/tests/run_ledger_backtest.sh -l rent_lamports_per_byte_5080 -m 2000000 -e 325
+src/flamenco/runtime/tests/run_ledger_backtest.sh -l rent_lamports_per_byte_2575 -m 2000000 -e 325
+src/flamenco/runtime/tests/run_ledger_backtest.sh -l rent_lamports_per_byte_1322 -m 2000000 -e 325
+src/flamenco/runtime/tests/run_ledger_backtest.sh -l rent_lamports_per_byte_696 -m 2000000 -e 325
+src/flamenco/runtime/tests/run_ledger_backtest.sh -l rent_lamports_per_byte_6960 -m 2000000 -e 325
