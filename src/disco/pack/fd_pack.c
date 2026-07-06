@@ -59,6 +59,12 @@ struct fd_pack_private_ord_txn {
   ushort noncemap_next;
   ushort noncemap_prev;
 
+  /* Arawn sealed-auction metadata.  Phase 1 records this for the
+     future planner without changing legacy scheduling. */
+  ulong arrival_seq;
+  ulong arrival_auction_id;
+  uchar candidate_kind;
+
   /* We want rewards*compute_est to fit in a ulong so that r1/c1 < r2/c2 can be
      computed as r1*c2 < r2*c1, with the product fitting in a ulong.
      compute_est has a small natural limit of mid-20 bits. rewards doesn't have
@@ -504,6 +510,8 @@ struct fd_pack_private {
      notified fd_pack that it has completed it. */
   ulong      outstanding_microblock_mask;
 
+  fd_pack_arawn_state_t arawn_state[1];
+
   /* The actual footprint for the pool and maps is allocated
      in the same order in which they are declared immediately following
      the struct.  I.e. these pointers point to memory not far after the
@@ -795,6 +803,7 @@ fd_pack_new( void                   * mem,
   pack->cumulative_vote_cost        = 0UL;
   pack->expire_before               = 0UL;
   pack->outstanding_microblock_mask = 0UL;
+  fd_pack_arawn_state_init( pack->arawn_state, pack_depth );
   pack->cumulative_rebated_cus      = 0UL;
 
   acct_blocklist_new( pack->acct_blocklist );
@@ -1400,6 +1409,9 @@ fd_pack_insert_txn_fini( fd_pack_t  * pack,
 
   /* At this point, we know we have space to insert the transaction and
      we've committed to insert it. */
+  ord->arrival_seq        = fd_pack_arawn_state_next_arrival_seq( pack->arawn_state );
+  ord->arrival_auction_id = fd_pack_arawn_state_current_auction( pack->arawn_state );
+  ord->candidate_kind     = FD_PACK_ARAWN_CANDIDATE_TXN;
 
   /* Since the pool uses ushorts, the size of the pool is < USHORT_MAX.
      Each transaction can reference an account at most once, which means
@@ -1610,6 +1622,15 @@ fd_pack_insert_bundle_fini( fd_pack_t          * pack,
       fd_pack_insert_bundle_cancel( pack, bundle, txn_cnt );
       return FD_PACK_INSERT_REJECT_NONCE_CONFLICT;
     }
+  }
+
+  ulong bundle_arrival_seq        = fd_pack_arawn_state_next_arrival_seq( pack->arawn_state );
+  ulong bundle_arrival_auction_id = fd_pack_arawn_state_current_auction( pack->arawn_state );
+  for( ulong i=0UL; i<txn_cnt; i++ ) {
+    fd_pack_ord_txn_t * ord = (fd_pack_ord_txn_t *)bundle[ i ];
+    ord->arrival_seq        = bundle_arrival_seq;
+    ord->arrival_auction_id = bundle_arrival_auction_id;
+    ord->candidate_kind     = FD_PACK_ARAWN_CANDIDATE_BUNDLE;
   }
 
   /* We put bundles in a treap just like all the other transactions, but
@@ -2708,6 +2729,36 @@ fd_pack_schedule_next_microblock( fd_pack_t *  pack,
 
 ulong fd_pack_bank_tile_cnt     ( fd_pack_t const * pack ) { return pack->bank_tile_cnt;         }
 ulong fd_pack_current_block_cost( fd_pack_t const * pack ) { return pack->cumulative_block_cost; }
+
+void
+fd_pack_set_strategy( fd_pack_t                 * pack,
+                      fd_pack_strategy_mode_t     strategy_mode,
+                      fd_pack_arawn_config_t const * opt_config ) {
+  fd_pack_arawn_state_set_strategy( pack->arawn_state, strategy_mode, opt_config, pack->pack_depth );
+}
+
+fd_pack_strategy_mode_t
+fd_pack_get_strategy( fd_pack_t const * pack ) {
+  return fd_pack_arawn_state_strategy( pack->arawn_state );
+}
+
+void
+fd_pack_get_arawn_config( fd_pack_t const * pack,
+                          fd_pack_arawn_config_t * config ) {
+  FD_TEST( config );
+  *config = pack->arawn_state->config[0];
+}
+
+int
+fd_pack_advance_auction( fd_pack_t * pack,
+                         ulong       auction_id ) {
+  return fd_pack_arawn_state_advance_auction( pack->arawn_state, auction_id );
+}
+
+ulong
+fd_pack_current_auction( fd_pack_t const * pack ) {
+  return fd_pack_arawn_state_current_auction( pack->arawn_state );
+}
 
 
 void

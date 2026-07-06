@@ -64,6 +64,129 @@
 /* The percentage of the transaction fees that are burned */
 #define FD_PACK_TXN_FEE_BURN_PCT        50UL
 
+#define FD_PACK_STRATEGY_LEGACY      0U
+#define FD_PACK_STRATEGY_ARAWN_BATCH 1U
+typedef uint fd_pack_strategy_mode_t;
+
+#define FD_PACK_ARAWN_CANDIDATE_NONE   0U
+#define FD_PACK_ARAWN_CANDIDATE_TXN    1U
+#define FD_PACK_ARAWN_CANDIDATE_BUNDLE 2U
+
+#define FD_PACK_ARAWN_DEFAULT_AUCTION_PERIOD_US           (8000UL)
+#define FD_PACK_ARAWN_DEFAULT_VOTE_RESERVE_BPS            (1200U)
+#define FD_PACK_ARAWN_DEFAULT_VOTE_PREFIX_BPS             (1500U)
+#define FD_PACK_ARAWN_DEFAULT_AGED_LANE_BPS                (500U)
+#define FD_PACK_ARAWN_DEFAULT_AGED_LANE_MIN_AUCTIONS        (16UL)
+#define FD_PACK_ARAWN_DEFAULT_BUNDLE_REPLACE_MARGIN_BPS     (50U)
+#define FD_PACK_ARAWN_DEFAULT_FRONTIER_TXN_CAP            (1024UL)
+#define FD_PACK_ARAWN_DEFAULT_FRONTIER_BUNDLE_CAP           (64UL)
+#define FD_PACK_ARAWN_BPS_MAX                            (10000U)
+
+struct fd_pack_arawn_config {
+  ulong auction_period_us;
+  uint  vote_reserve_bps;
+  uint  vote_prefix_bps;
+  uint  aged_lane_bps;
+  ulong aged_lane_min_auctions;
+  uint  bundle_replace_margin_bps;
+  ulong frontier_txn_cap;
+  ulong frontier_bundle_cap;
+  int   jito_compat;
+  int   shadow_mode;
+};
+typedef struct fd_pack_arawn_config fd_pack_arawn_config_t;
+
+static inline void
+fd_pack_arawn_default_config( fd_pack_arawn_config_t * cfg ) {
+  cfg->auction_period_us          = FD_PACK_ARAWN_DEFAULT_AUCTION_PERIOD_US;
+  cfg->vote_reserve_bps           = FD_PACK_ARAWN_DEFAULT_VOTE_RESERVE_BPS;
+  cfg->vote_prefix_bps            = FD_PACK_ARAWN_DEFAULT_VOTE_PREFIX_BPS;
+  cfg->aged_lane_bps              = FD_PACK_ARAWN_DEFAULT_AGED_LANE_BPS;
+  cfg->aged_lane_min_auctions     = FD_PACK_ARAWN_DEFAULT_AGED_LANE_MIN_AUCTIONS;
+  cfg->bundle_replace_margin_bps  = FD_PACK_ARAWN_DEFAULT_BUNDLE_REPLACE_MARGIN_BPS;
+  cfg->frontier_txn_cap           = 0UL; /* derived from pack_depth by normalization */
+  cfg->frontier_bundle_cap        = FD_PACK_ARAWN_DEFAULT_FRONTIER_BUNDLE_CAP;
+  cfg->jito_compat                = 0;
+  cfg->shadow_mode                = 1;
+}
+
+static inline void
+fd_pack_arawn_normalize_config( fd_pack_arawn_config_t * cfg,
+                                ulong                    pack_depth ) {
+  if( FD_UNLIKELY( !cfg->auction_period_us         ) ) cfg->auction_period_us         = FD_PACK_ARAWN_DEFAULT_AUCTION_PERIOD_US;
+  if( FD_UNLIKELY( !cfg->vote_reserve_bps          ) ) cfg->vote_reserve_bps          = FD_PACK_ARAWN_DEFAULT_VOTE_RESERVE_BPS;
+  if( FD_UNLIKELY( !cfg->vote_prefix_bps           ) ) cfg->vote_prefix_bps           = FD_PACK_ARAWN_DEFAULT_VOTE_PREFIX_BPS;
+  if( FD_UNLIKELY( !cfg->aged_lane_bps             ) ) cfg->aged_lane_bps             = FD_PACK_ARAWN_DEFAULT_AGED_LANE_BPS;
+  if( FD_UNLIKELY( !cfg->aged_lane_min_auctions    ) ) cfg->aged_lane_min_auctions    = FD_PACK_ARAWN_DEFAULT_AGED_LANE_MIN_AUCTIONS;
+  if( FD_UNLIKELY( !cfg->bundle_replace_margin_bps ) ) cfg->bundle_replace_margin_bps = FD_PACK_ARAWN_DEFAULT_BUNDLE_REPLACE_MARGIN_BPS;
+  if( FD_UNLIKELY( !cfg->frontier_txn_cap          ) ) cfg->frontier_txn_cap          = fd_ulong_min( pack_depth, FD_PACK_ARAWN_DEFAULT_FRONTIER_TXN_CAP );
+  else if( FD_UNLIKELY( cfg->frontier_txn_cap>pack_depth ) ) cfg->frontier_txn_cap = pack_depth;
+  if( FD_UNLIKELY( !cfg->frontier_bundle_cap       ) ) cfg->frontier_bundle_cap       = FD_PACK_ARAWN_DEFAULT_FRONTIER_BUNDLE_CAP;
+
+  cfg->vote_reserve_bps          = fd_uint_min( cfg->vote_reserve_bps,          FD_PACK_ARAWN_BPS_MAX );
+  cfg->vote_prefix_bps           = fd_uint_min( cfg->vote_prefix_bps,           FD_PACK_ARAWN_BPS_MAX );
+  cfg->aged_lane_bps             = fd_uint_min( cfg->aged_lane_bps,             FD_PACK_ARAWN_BPS_MAX );
+  cfg->jito_compat               = !!cfg->jito_compat;
+  cfg->shadow_mode               = !!cfg->shadow_mode;
+}
+
+struct fd_pack_arawn_state {
+  fd_pack_strategy_mode_t strategy_mode;
+  fd_pack_arawn_config_t  config[1];
+  ulong                   current_auction_id;
+  ulong                   next_arrival_seq;
+};
+typedef struct fd_pack_arawn_state fd_pack_arawn_state_t;
+
+static inline int
+fd_pack_strategy_mode_valid( fd_pack_strategy_mode_t strategy_mode ) {
+  return (strategy_mode==FD_PACK_STRATEGY_LEGACY) | (strategy_mode==FD_PACK_STRATEGY_ARAWN_BATCH);
+}
+
+static inline void
+fd_pack_arawn_state_init( fd_pack_arawn_state_t * state,
+                          ulong                   pack_depth ) {
+  state->strategy_mode       = FD_PACK_STRATEGY_LEGACY;
+  state->current_auction_id  = 0UL;
+  state->next_arrival_seq    = 0UL;
+  fd_pack_arawn_default_config( state->config );
+  fd_pack_arawn_normalize_config( state->config, pack_depth );
+}
+
+static inline void
+fd_pack_arawn_state_set_strategy( fd_pack_arawn_state_t        * state,
+                                  fd_pack_strategy_mode_t        strategy_mode,
+                                  fd_pack_arawn_config_t const * opt_config,
+                                  ulong                          pack_depth ) {
+  state->strategy_mode = fd_uint_if( fd_pack_strategy_mode_valid( strategy_mode ), strategy_mode, FD_PACK_STRATEGY_LEGACY );
+  if( FD_LIKELY( opt_config ) ) state->config[0] = *opt_config;
+  else                          fd_pack_arawn_default_config( state->config );
+  fd_pack_arawn_normalize_config( state->config, pack_depth );
+}
+
+FD_FN_PURE static inline fd_pack_strategy_mode_t
+fd_pack_arawn_state_strategy( fd_pack_arawn_state_t const * state ) {
+  return state->strategy_mode;
+}
+
+FD_FN_PURE static inline ulong
+fd_pack_arawn_state_current_auction( fd_pack_arawn_state_t const * state ) {
+  return state->current_auction_id;
+}
+
+static inline int
+fd_pack_arawn_state_advance_auction( fd_pack_arawn_state_t * state,
+                                     ulong                   auction_id ) {
+  if( FD_LIKELY( auction_id<=state->current_auction_id ) ) return 0;
+  state->current_auction_id = auction_id;
+  return 1;
+}
+
+static inline ulong
+fd_pack_arawn_state_next_arrival_seq( fd_pack_arawn_state_t * state ) {
+  return state->next_arrival_seq++;
+}
+
 /* The Solana network and Firedancer implementation details impose
    several limits on what pack can produce.  These limits are grouped in
    this one struct fd_pack_limits_t, which is just a convenient way to
@@ -285,6 +408,25 @@ FD_FN_PURE ulong fd_pack_current_block_cost( fd_pack_t const * pack );
    must be a valid local join.  The result will be in [1,
    FD_PACK_MAX_BANK_TILES]. */
 FD_FN_PURE ulong fd_pack_bank_tile_cnt( fd_pack_t const * pack );
+
+/* fd_pack_set_strategy configures the scheduler strategy state owned by
+   pack.  Legacy mode is the default and preserves current scheduling
+   behavior.  Arawn batch mode records sealed-auction metadata for the
+   Arawn planner.  opt_config==NULL selects the Arawn defaults. */
+void fd_pack_set_strategy( fd_pack_t * pack, fd_pack_strategy_mode_t strategy_mode, fd_pack_arawn_config_t const * opt_config );
+
+/* fd_pack_get_strategy returns the current pack strategy mode. */
+FD_FN_PURE fd_pack_strategy_mode_t fd_pack_get_strategy( fd_pack_t const * pack );
+
+/* fd_pack_get_arawn_config copies the normalized Arawn configuration. */
+void fd_pack_get_arawn_config( fd_pack_t const * pack, fd_pack_arawn_config_t * config );
+
+/* fd_pack_advance_auction raises the current sealed auction id.  It
+   returns 1 if the id advanced and 0 if auction_id was not newer. */
+int fd_pack_advance_auction( fd_pack_t * pack, ulong auction_id );
+
+/* fd_pack_current_auction returns the current sealed auction id. */
+FD_FN_PURE ulong fd_pack_current_auction( fd_pack_t const * pack );
 
 /* fd_pack_set_block_limits: Updates the limits provided fd_pack_new to
    these new values.  Any future microblocks produced by this pack
