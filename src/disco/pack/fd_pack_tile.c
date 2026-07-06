@@ -819,13 +819,14 @@ after_credit( fd_pack_ctx_t *     ctx,
 
     int flags;
 
-    flags = fd_pack_schedule_flags_for_strategy( ctx->strategy,
-                                                 i,
-                                                 pacing_execle_cnt,
-                                                 now,
-                                                 &ctx->next_arawn_auction_tick,
-                                                 &ctx->arawn_auction_bank_mask,
-                                                 ctx->arawn_auction_period_ticks );
+    flags = fd_pack_schedule_flags_for_strategy_with_pack( ctx->pack,
+                                                           ctx->strategy,
+                                                           i,
+                                                           pacing_execle_cnt,
+                                                           now,
+                                                           &ctx->next_arawn_auction_tick,
+                                                           &ctx->arawn_auction_bank_mask,
+                                                           ctx->arawn_auction_period_ticks );
 
     fd_txn_e_t * microblock_dst = fd_chunk_to_laddr( ctx->execle_out_mem, ctx->execle_out_chunk );
     long schedule_duration = -fd_tickcount();
@@ -1326,6 +1327,15 @@ unprivileged_init( fd_topo_t const *      topo,
                                          fd_type_pun_const( tile->pack.acct_blocklist ), tile->pack.acct_blocklist_cnt,
                                          rng ) );
   if( FD_UNLIKELY( !ctx->pack ) ) FD_LOG_ERR(( "fd_pack_new failed" ));
+
+  fd_pack_strategy_mode_t pack_strategy_mode = fd_pack_strategy_mode_from_schedule_strategy( tile->pack.schedule_strategy );
+  fd_pack_arawn_config_t  pack_arawn_config[ 1 ];
+  fd_pack_arawn_config_t const * pack_arawn_config_opt = NULL;
+  if( FD_UNLIKELY( pack_strategy_mode==FD_PACK_STRATEGY_ARAWN_BATCH ) ) {
+    fd_pack_arawn_config_from_tile( pack_arawn_config, tile->pack.auction_period_millis );
+    pack_arawn_config_opt = pack_arawn_config;
+  }
+  fd_pack_set_strategy( ctx->pack, pack_strategy_mode, pack_arawn_config_opt );
 
   if( FD_UNLIKELY( tile->in_cnt>32UL ) ) FD_LOG_ERR(( "Too many input links (%lu>32) to pack tile", tile->in_cnt ));
 
