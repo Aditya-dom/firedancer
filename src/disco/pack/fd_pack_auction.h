@@ -9,6 +9,8 @@
 #define FD_PACK_STRATEGY_ARAWN    2
 #define FD_PACK_STRATEGY_CNT      3
 
+FD_STATIC_ASSERT( FD_PACK_MAX_EXECLE_TILES<=8UL*sizeof(ulong), arawn_bank_mask );
+
 static inline long
 fd_pack_arawn_next_auction_tick_after( long now,
                                        long next_auction_tick,
@@ -24,35 +26,23 @@ fd_pack_arawn_next_auction_tick_after( long now,
 
 static inline int
 fd_pack_arawn_txn_allowed( long   now,
+                           int    bank_idx,
                            long * next_auction_tick,
-                           int *  auction_active ) {
-  if( FD_LIKELY( *auction_active ) ) return 1;
-  if( FD_LIKELY( now<*next_auction_tick ) ) return 0;
+                           ulong * auction_bank_mask,
+                           long   auction_period_ticks ) {
+  if( FD_UNLIKELY( auction_period_ticks<=0L ) ) return 0;
 
-  *auction_active = 1;
-  return 1;
-}
-
-static inline void
-fd_pack_arawn_after_schedule( long   now,
-                              long   auction_period_ticks,
-                              long * next_auction_tick,
-                              int *  auction_active,
-                              int    nonvote_nonbundle_scheduled ) {
-  if( FD_LIKELY( !*auction_active || nonvote_nonbundle_scheduled ) ) return;
-
-  *auction_active    = 0;
-  *next_auction_tick = fd_pack_arawn_next_auction_tick_after( now, *next_auction_tick, auction_period_ticks );
-}
-
-static inline int
-fd_pack_arawn_microblock_has_nonvote_nonbundle( fd_txn_e_t const * txns,
-                                                ulong              txn_cnt ) {
-  for( ulong i=0UL; i<txn_cnt; i++ ) {
-    uint flags = txns[ i ].txnp->flags;
-    if( FD_LIKELY( !(flags & (FD_TXN_P_FLAGS_IS_SIMPLE_VOTE|FD_TXN_P_FLAGS_BUNDLE)) ) ) return 1;
+  if( FD_UNLIKELY( now>=*next_auction_tick ) ) {
+    *next_auction_tick = fd_pack_arawn_next_auction_tick_after( now, *next_auction_tick, auction_period_ticks );
+    *auction_bank_mask = 0UL;
   }
-  return 0;
+  if( FD_LIKELY( now<*next_auction_tick && !*auction_bank_mask ) ) return 0;
+
+  ulong bank_bit = 1UL << (ulong)bank_idx;
+  if( FD_UNLIKELY( *auction_bank_mask & bank_bit ) ) return 0;
+
+  *auction_bank_mask |= bank_bit;
+  return 1;
 }
 
 static inline int
@@ -61,7 +51,8 @@ fd_pack_schedule_flags_for_strategy( int    strategy,
                                      int    pacing_execle_cnt,
                                      long   now,
                                      long * next_auction_tick,
-                                     int *  auction_active ) {
+                                     ulong * auction_bank_mask,
+                                     long   auction_period_ticks ) {
   switch( strategy ) {
     default:
     case FD_PACK_STRATEGY_PERF:
@@ -71,10 +62,15 @@ fd_pack_schedule_flags_for_strategy( int    strategy,
       return FD_PACK_SCHEDULE_VOTE | fd_int_if( bank_idx==0,                FD_PACK_SCHEDULE_BUNDLE, 0 )
                                    | fd_int_if( bank_idx<pacing_execle_cnt, FD_PACK_SCHEDULE_TXN,    0 );
 
-    case FD_PACK_STRATEGY_ARAWN:
-      return FD_PACK_SCHEDULE_VOTE | fd_int_if( bank_idx==0, FD_PACK_SCHEDULE_BUNDLE, 0 )
-                                   | fd_int_if( fd_pack_arawn_txn_allowed( now, next_auction_tick, auction_active ),
-                                                FD_PACK_SCHEDULE_TXN, 0 );
+    case FD_PACK_STRATEGY_ARAWN: {
+      int allow_txn = fd_pack_arawn_txn_allowed( now,
+                                                 bank_idx,
+                                                 next_auction_tick,
+                                                 auction_bank_mask,
+                                                 auction_period_ticks );
+      return FD_PACK_SCHEDULE_VOTE | fd_int_if( allow_txn, FD_PACK_SCHEDULE_TXN, 0 )
+                                   | fd_int_if( !allow_txn & (bank_idx==0), FD_PACK_SCHEDULE_BUNDLE, 0 );
+    }
   }
 }
 

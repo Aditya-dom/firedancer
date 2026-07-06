@@ -223,7 +223,7 @@ typedef struct {
 
   long arawn_auction_period_ticks;
   long next_arawn_auction_tick;
-  int  arawn_auction_active;
+  ulong arawn_auction_bank_mask;
 
   /* last_successful_insert stores the tickcount of the last
      successful transaction insert. */
@@ -667,7 +667,7 @@ after_credit( fd_pack_ctx_t *     ctx,
     ctx->drain_execle        = 1;
     ctx->leader_slot         = ULONG_MAX;
     ctx->slot_microblock_cnt = 0UL;
-    ctx->arawn_auction_active = 0;
+    ctx->arawn_auction_bank_mask = 0UL;
     remove_ib( ctx );
 
     update_metric_state( ctx, now, FD_PACK_METRIC_STATE_LEADER,       0 );
@@ -820,7 +820,8 @@ after_credit( fd_pack_ctx_t *     ctx,
                                                  pacing_execle_cnt,
                                                  now,
                                                  &ctx->next_arawn_auction_tick,
-                                                 &ctx->arawn_auction_active );
+                                                 &ctx->arawn_auction_bank_mask,
+                                                 ctx->arawn_auction_period_ticks );
 
     fd_txn_e_t * microblock_dst = fd_chunk_to_laddr( ctx->execle_out_mem, ctx->execle_out_chunk );
     long schedule_duration = -fd_tickcount();
@@ -828,14 +829,6 @@ after_credit( fd_pack_ctx_t *     ctx,
     schedule_duration      += fd_tickcount();
     fd_histf_sample( (schedule_cnt>0UL) ? ctx->schedule_duration : ctx->no_sched_duration, (ulong)schedule_duration );
     long now2 = fd_tickcount();
-
-    if( FD_UNLIKELY( ctx->strategy==FD_PACK_STRATEGY_ARAWN ) ) {
-      fd_pack_arawn_after_schedule( now2,
-                                    ctx->arawn_auction_period_ticks,
-                                    &ctx->next_arawn_auction_tick,
-                                    &ctx->arawn_auction_active,
-                                    fd_pack_arawn_microblock_has_nonvote_nonbundle( microblock_dst, schedule_cnt ) );
-    }
 
     if( FD_LIKELY( schedule_cnt ) ) {
       any_scheduled = 1;
@@ -921,7 +914,7 @@ after_credit( fd_pack_ctx_t *     ctx,
     ctx->drain_execle        = 1;
     ctx->leader_slot         = ULONG_MAX;
     ctx->slot_microblock_cnt = 0UL;
-    ctx->arawn_auction_active = 0;
+    ctx->arawn_auction_bank_mask = 0UL;
     remove_ib( ctx );
 
     return;
@@ -1150,7 +1143,7 @@ after_frag( fd_pack_ctx_t *     ctx,
       ctx->drain_execle        = 1;
       ctx->leader_slot         = ULONG_MAX;
       ctx->slot_microblock_cnt = 0UL;
-      ctx->arawn_auction_active = 0;
+      ctx->arawn_auction_bank_mask = 0UL;
       remove_ib( ctx );
     }
     ctx->leader_slot = leader_slot;
@@ -1177,7 +1170,7 @@ after_frag( fd_pack_ctx_t *     ctx,
     /* We may still get overrun, but then we'll never use this and just
        reinitialize it the next time when we actually become leader. */
     fd_pack_pacing_init( ctx->pacer, now_ticks, end_ticks, (float)ctx->ticks_per_ns, ctx->limits.slot_max_cost );
-    ctx->arawn_auction_active    = 0;
+    ctx->arawn_auction_bank_mask = 0UL;
     ctx->next_arawn_auction_tick = now_ticks;
 
     if( FD_UNLIKELY( ctx->crank->enabled ) ) {
@@ -1417,7 +1410,7 @@ unprivileged_init( fd_topo_t const *      topo,
   if( FD_UNLIKELY( ctx->arawn_auction_period_ticks<=0L ) )
     FD_LOG_ERR(( "invalid pack auction period %lu ms", tile->pack.auction_period_millis ));
   ctx->next_arawn_auction_tick       = LONG_MAX;
-  ctx->arawn_auction_active          = 0;
+  ctx->arawn_auction_bank_mask       = 0UL;
   ctx->max_pending_transactions      = tile->pack.max_pending_transactions;
   ctx->leader_slot                   = ULONG_MAX;
   ctx->leader_bank                   = NULL;
