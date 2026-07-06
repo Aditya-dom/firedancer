@@ -122,6 +122,18 @@ test_arawn_skips_missed_auction_periods( void ) {
 }
 
 static void
+test_arawn_selects_unused_idle_bank_during_batch( void ) {
+  FD_TEST( fd_pack_arawn_select_bank( 3UL, 1UL )==1 );
+  FD_TEST( fd_pack_arawn_select_bank( 7UL, 3UL )==2 );
+}
+
+static void
+test_arawn_selects_lowest_idle_bank_without_unused_ready_bank( void ) {
+  FD_TEST( fd_pack_arawn_select_bank( 1UL, 0UL )==0 );
+  FD_TEST( fd_pack_arawn_select_bank( 1UL, 1UL )==0 );
+}
+
+static void
 test_perf_keeps_existing_bundle_gate( void ) {
   long  next_auction_tick = 1000L;
   ulong auction_bank_mask = 0UL;
@@ -168,6 +180,8 @@ main( int     argc,
   test_arawn_allows_each_bank_once_per_auction();
   test_arawn_resets_bank_mask_next_auction();
   test_arawn_skips_missed_auction_periods();
+  test_arawn_selects_unused_idle_bank_during_batch();
+  test_arawn_selects_lowest_idle_bank_without_unused_ready_bank();
   test_perf_keeps_existing_bundle_gate();
   test_balanced_keeps_existing_pacing_gate();
 

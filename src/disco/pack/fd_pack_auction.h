@@ -32,17 +32,26 @@ fd_pack_arawn_txn_allowed( long   now,
                            long   auction_period_ticks ) {
   if( FD_UNLIKELY( auction_period_ticks<=0L ) ) return 0;
 
+  int opened_auction = 0;
   if( FD_UNLIKELY( now>=*next_auction_tick ) ) {
     *next_auction_tick = fd_pack_arawn_next_auction_tick_after( now, *next_auction_tick, auction_period_ticks );
     *auction_bank_mask = 0UL;
+    opened_auction     = 1;
   }
-  if( FD_LIKELY( now<*next_auction_tick && !*auction_bank_mask ) ) return 0;
+  if( FD_LIKELY( !opened_auction && now<*next_auction_tick && !*auction_bank_mask ) ) return 0;
 
   ulong bank_bit = 1UL << (ulong)bank_idx;
   if( FD_UNLIKELY( *auction_bank_mask & bank_bit ) ) return 0;
 
   *auction_bank_mask |= bank_bit;
   return 1;
+}
+
+static inline int
+fd_pack_arawn_select_bank( ulong idle_bank_mask,
+                           ulong auction_bank_mask ) {
+  ulong unused_idle_bank_mask = fd_ulong_if( !!auction_bank_mask, idle_bank_mask & ~auction_bank_mask, 0UL );
+  return fd_ulong_find_lsb( fd_ulong_if( !!unused_idle_bank_mask, unused_idle_bank_mask, idle_bank_mask ) );
 }
 
 static inline int
