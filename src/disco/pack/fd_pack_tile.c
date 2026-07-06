@@ -811,9 +811,11 @@ after_credit( fd_pack_ctx_t *     ctx,
   if( FD_LIKELY( ctx->execle_idle_bitset ) ) { /* Optimize for schedule */
     any_ready = 1;
 
-    int i = fd_int_if( ctx->strategy==FD_PACK_STRATEGY_ARAWN,
-                       fd_pack_arawn_select_bank( ctx->execle_idle_bitset, ctx->arawn_auction_bank_mask ),
-                       fd_ulong_find_lsb( ctx->execle_idle_bitset ) );
+    int i;
+    if( FD_UNLIKELY( ctx->strategy==FD_PACK_STRATEGY_ARAWN ) )
+      i = fd_pack_arawn_select_bank( ctx->execle_idle_bitset, ctx->arawn_auction_bank_mask );
+    else
+      i = fd_ulong_find_lsb( ctx->execle_idle_bitset );
 
     int flags;
 
