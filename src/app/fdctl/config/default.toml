@@ -796,8 +796,8 @@ dynamic_port_range = "8900-9000"
     # denial of service or spam attack.
     verify_tile_count = 6
 
-    # How many bank tiles to run.  Should be set to 4 for perf and
-    # balanced scheduling modes.  Bank tiles execute transactions, so
+    # How many bank tiles to run.  Should be set to 4 for perf, balanced,
+    # and arawn scheduling modes.  Bank tiles execute transactions, so
     # the validator can include the results of the transaction into a
     # block when we are leader.  Because of current consensus limits
     # restricting blocks to around 32,000 transactions per block, there
@@ -1325,7 +1325,7 @@ dynamic_port_range = "8900-9000"
         # Over time, as the network gets faster and compute unit limits
         # are raised, this trade-off will become less pronounced.
         #
-        # The Firedancer team supports two different strategies which
+        # The Firedancer team supports three different strategies which
         # are described below:
         #
         #  "perf"
@@ -1336,7 +1336,7 @@ dynamic_port_range = "8900-9000"
         #   When using the perf scheduling mode, there is no reason to
         #   increase the bank tile count beyond the default of 4.
         #
-        #  "balanced" (default)
+        #  "balanced"
         #   Try to fill the block at a rate that is just fast enough to
         #   fill it by the end.  This strategy optimizes for revenue
         #   from priority fees, but can result in blocks that are not
@@ -1346,10 +1346,31 @@ dynamic_port_range = "8900-9000"
         #   When using the balanced mode, there is no reason to increase
         #   bank tile count beyond the default of 4.
         #
+        #  "arawn" (default)
+        #   Arawn is an alternative scheduler for Firedancer and
+        #   Frankendancer.  It uses frequent batch auctions / frequent
+        #   batch ordering (FBA/FBO): votes and bundles remain eligible
+        #   for immediate scheduling, while non-vote, non-bundled
+        #   transactions are scheduled only during periodic auctions.
+        #   This is intended to restore the value of Solana priority fees
+        #   by making fast inclusion compete on priority fees instead of
+        #   first-arrival races, opaque external block-builder priority,
+        #   or tips to transaction landing services.  Arawn is designed to
+        #   preserve validator independence, comply with SFDP
+        #   requirements, align with expected Constellation scheduling
+        #   behavior, and remain compatible with Jito bundles if enabled.
+        #
         # In cases of network congestion, high volume, or if seeing poor
         # block packing performance for any reason, it is recommended to
         # revert to the "balanced" strategy.
-        schedule_strategy = "balanced"
+        schedule_strategy = "arawn"
+
+        # For the "arawn" schedule strategy, this is the interval between
+        # frequent batch auctions in milliseconds.  A 50 ms period gives
+        # roughly eight auctions in a 400 ms slot.  Values around 45-50 ms
+        # are expected to balance latency with meaningful batch ordering.
+        # This setting is ignored by the "perf" and "balanced" strategies.
+        auction_period_millis = 50
 
         # If the pack tile receives a transaction that reads from or
         # writes to an address in the account_blocklist, it will reject

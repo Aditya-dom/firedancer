@@ -11,6 +11,7 @@
 #include "../keyguard/fd_keyguard_client.h"
 #include "../metrics/fd_metrics.h"
 #include "../pack/fd_pack.h"
+#include "../pack/fd_pack_auction.h"
 #include "../pack/fd_pack_cost.h"
 #include "../pack/fd_pack_pacing.h"
 
@@ -106,11 +107,7 @@ FD_IMPORT( wait_duration, "src/disco/pack/pack_delay.bin", ulong, 6, "" );
 
 #endif
 
-/* Sync with src/app/shared/fd_config.c */
-#define FD_PACK_STRATEGY_PERF     0
-#define FD_PACK_STRATEGY_BALANCED 1
-
-static char const * const schedule_strategy_strings[2] = { "PRF", "BAL" };
+static char const * const schedule_strategy_strings[ FD_PACK_STRATEGY_CNT ] = { "PRF", "BAL", "ARW" };
 
 
 typedef struct {
@@ -137,7 +134,7 @@ typedef struct {
   uchar executed_txn_sig[ 64UL ];
   uchar txn_committed;
 
-  /* One of the FD_PACK_STRATEGY_* values defined above */
+  /* One of the FD_PACK_STRATEGY_* values in fd_pack_auction.h. */
   int      strategy;
 
   /* The value passed to fd_pack_new, etc. */
@@ -223,6 +220,10 @@ typedef struct {
      ticks_per_ns is the cached value from tempo. */
   fd_pack_pacing_t pacer[1];
   double           ticks_per_ns;
+
+  long arawn_auction_period_ticks;
+  long next_arawn_auction_tick;
+  int  arawn_auction_active;
 
   /* last_successful_insert stores the tickcount of the last
      successful transaction insert. */
@@ -666,6 +667,7 @@ after_credit( fd_pack_ctx_t *     ctx,
     ctx->drain_execle        = 1;
     ctx->leader_slot         = ULONG_MAX;
     ctx->slot_microblock_cnt = 0UL;
+    ctx->arawn_auction_active = 0;
     remove_ib( ctx );
 
     update_metric_state( ctx, now, FD_PACK_METRIC_STATE_LEADER,       0 );
@@ -813,32 +815,30 @@ after_credit( fd_pack_ctx_t *     ctx,
 
     int flags;
 
-    switch( ctx->strategy ) {
-      default:
-      case FD_PACK_STRATEGY_PERF:
-        flags = FD_PACK_SCHEDULE_VOTE | FD_PACK_SCHEDULE_BUNDLE | FD_PACK_SCHEDULE_TXN;
-        break;
-      case FD_PACK_STRATEGY_BALANCED:
-        /* We want to exempt votes from pacing, so we always allow
-           scheduling votes.  It doesn't really make much sense to pace
-           bundles, because they get scheduled in FIFO order.  However,
-           we keep pacing for normal transactions.  For example, if
-           pacing_execle_cnt is 0, then pack won't schedule normal
-           transactions to any execle tile. */
-        flags = FD_PACK_SCHEDULE_VOTE | fd_int_if( i==0,                FD_PACK_SCHEDULE_BUNDLE, 0 )
-                                      | fd_int_if( i<pacing_execle_cnt, FD_PACK_SCHEDULE_TXN,    0 );
-        break;
-    }
+    flags = fd_pack_schedule_flags_for_strategy( ctx->strategy,
+                                                 i,
+                                                 pacing_execle_cnt,
+                                                 now,
+                                                 &ctx->next_arawn_auction_tick,
+                                                 &ctx->arawn_auction_active );
 
     fd_txn_e_t * microblock_dst = fd_chunk_to_laddr( ctx->execle_out_mem, ctx->execle_out_chunk );
     long schedule_duration = -fd_tickcount();
     ulong schedule_cnt = fd_pack_schedule_next_microblock( ctx->pack, CUS_PER_MICROBLOCK, VOTE_FRACTION, (ulong)i, flags, microblock_dst );
     schedule_duration      += fd_tickcount();
     fd_histf_sample( (schedule_cnt>0UL) ? ctx->schedule_duration : ctx->no_sched_duration, (ulong)schedule_duration );
+    long now2 = fd_tickcount();
+
+    if( FD_UNLIKELY( ctx->strategy==FD_PACK_STRATEGY_ARAWN ) ) {
+      fd_pack_arawn_after_schedule( now2,
+                                    ctx->arawn_auction_period_ticks,
+                                    &ctx->next_arawn_auction_tick,
+                                    &ctx->arawn_auction_active,
+                                    fd_pack_arawn_microblock_has_nonvote_nonbundle( microblock_dst, schedule_cnt ) );
+    }
 
     if( FD_LIKELY( schedule_cnt ) ) {
       any_scheduled = 1;
-      long  now2   = fd_tickcount();
       ulong tsorig = (ulong)fd_frag_meta_ts_comp( now  ); /* A bound on when we observed execle was idle */
       ulong tspub  = (ulong)fd_frag_meta_ts_comp( now2 );
       ulong chunk  = ctx->execle_out_chunk;
@@ -921,6 +921,7 @@ after_credit( fd_pack_ctx_t *     ctx,
     ctx->drain_execle        = 1;
     ctx->leader_slot         = ULONG_MAX;
     ctx->slot_microblock_cnt = 0UL;
+    ctx->arawn_auction_active = 0;
     remove_ib( ctx );
 
     return;
@@ -1149,6 +1150,7 @@ after_frag( fd_pack_ctx_t *     ctx,
       ctx->drain_execle        = 1;
       ctx->leader_slot         = ULONG_MAX;
       ctx->slot_microblock_cnt = 0UL;
+      ctx->arawn_auction_active = 0;
       remove_ib( ctx );
     }
     ctx->leader_slot = leader_slot;
@@ -1175,6 +1177,8 @@ after_frag( fd_pack_ctx_t *     ctx,
     /* We may still get overrun, but then we'll never use this and just
        reinitialize it the next time when we actually become leader. */
     fd_pack_pacing_init( ctx->pacer, now_ticks, end_ticks, (float)ctx->ticks_per_ns, ctx->limits.slot_max_cost );
+    ctx->arawn_auction_active    = 0;
+    ctx->next_arawn_auction_tick = now_ticks;
 
     if( FD_UNLIKELY( ctx->crank->enabled ) ) {
       /* If we get overrun, we'll just never use these values, but the
@@ -1357,7 +1361,7 @@ unprivileged_init( fd_topo_t const *      topo,
   if( FD_UNLIKELY( execle_cnt>FD_PACK_MAX_EXECLE_TILES       ) ) FD_LOG_ERR(( "pack tile connects to too many execle tiles" ));
   // if( FD_UNLIKELY( execle_cnt!=tile->pack.execle_tile_count ) ) FD_LOG_ERR(( "pack tile connects to %lu execle tiles, but tile->pack.execle_tile_count is %lu", execle_cnt, tile->pack.execle_tile_count ));
 
-  FD_TEST( (tile->pack.schedule_strategy>=0) & (tile->pack.schedule_strategy<=FD_PACK_STRATEGY_BALANCED) );
+  FD_TEST( (tile->pack.schedule_strategy>=0) & (tile->pack.schedule_strategy<FD_PACK_STRATEGY_CNT) );
 
   ctx->crank->enabled = tile->pack.bundle.enabled;
   if( FD_UNLIKELY( tile->pack.bundle.enabled ) ) {
@@ -1409,6 +1413,11 @@ unprivileged_init( fd_topo_t const *      topo,
   ctx->cur_spot                      = NULL;
   ctx->is_bundle                     = 0;
   ctx->strategy                      = tile->pack.schedule_strategy;
+  ctx->arawn_auction_period_ticks    = (long)(fd_tempo_tick_per_ns( NULL )*(double)tile->pack.auction_period_millis*1000000.0 + 0.5);
+  if( FD_UNLIKELY( ctx->arawn_auction_period_ticks<=0L ) )
+    FD_LOG_ERR(( "invalid pack auction period %lu ms", tile->pack.auction_period_millis ));
+  ctx->next_arawn_auction_tick       = LONG_MAX;
+  ctx->arawn_auction_active          = 0;
   ctx->max_pending_transactions      = tile->pack.max_pending_transactions;
   ctx->leader_slot                   = ULONG_MAX;
   ctx->leader_bank                   = NULL;

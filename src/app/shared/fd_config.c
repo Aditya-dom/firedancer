@@ -365,6 +365,7 @@ fd_config_fill( fd_config_t * config,
 
   if(      FD_LIKELY( !strcmp( config->tiles.pack.schedule_strategy, "perf"     ) ) ) config->tiles.pack.schedule_strategy_enum = 0;
   else if( FD_LIKELY( !strcmp( config->tiles.pack.schedule_strategy, "balanced" ) ) ) config->tiles.pack.schedule_strategy_enum = 1;
+  else if( FD_LIKELY( !strcmp( config->tiles.pack.schedule_strategy, "arawn"    ) ) ) config->tiles.pack.schedule_strategy_enum = 2;
   else if( FD_LIKELY( !strcmp( config->tiles.pack.schedule_strategy, "revenue"  ) ) ) {
     FD_LOG_ERR(( "the revenue scheduler has been removed.  Please update [tiles.pack.schedule_strategy]" ));
   }
@@ -565,6 +566,7 @@ fd_config_validate( fd_config_t const * config ) {
   CFG_HAS_NON_ZERO( tiles.dedup.signature_cache_size );
 
   CFG_HAS_NON_ZERO( tiles.pack.max_pending_transactions );
+  CFG_HAS_NON_ZERO( tiles.pack.auction_period_millis    );
 
   CFG_HAS_NON_ZERO( tiles.shred.max_pending_shred_sets );
 

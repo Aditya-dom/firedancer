@@ -8,6 +8,11 @@ static char const cfg_str_1[] =
 static char const cfg_str_2[] =
   "wumbo = \"mini\"";
 
+static char const cfg_str_3[] =
+  "[tiles.pack]\n"
+  "  schedule_strategy = \"arawn\"\n"
+  "  auction_period_millis = 50\n";
+
 extern uchar const fdctl_default_config[];
 extern ulong const fdctl_default_config_sz;
 
@@ -43,7 +48,18 @@ main( int     argc,
   pod = fd_pod_join( fd_pod_new( pod_mem, sizeof(pod_mem) ) );
   FD_TEST( fd_toml_parse( fdctl_default_config, fdctl_default_config_sz, pod, scratch, sizeof(scratch), NULL ) == FD_TOML_SUCCESS );
   FD_TEST( fd_config_extract_pod( pod, config ) == config );
+  FD_TEST( 0==strcmp( config->tiles.pack.schedule_strategy, "arawn" ) );
+  FD_TEST( config->tiles.pack.auction_period_millis==50UL );
   fd_config_validate( config );  /* exits process with code 1 on failure */
+
+  /* Parse Arawn scheduler configuration */
+
+  memset( config, 0, sizeof(config_t) );
+  pod = fd_pod_join( fd_pod_new( pod_mem, sizeof(pod_mem) ) );
+  FD_TEST( fd_toml_parse( cfg_str_3, sizeof(cfg_str_3)-1, pod, scratch, sizeof(scratch), NULL ) == FD_TOML_SUCCESS );
+  FD_TEST( fd_config_extract_pod( pod, config ) == config );
+  FD_TEST( 0==strcmp( config->tiles.pack.schedule_strategy, "arawn" ) );
+  FD_TEST( config->tiles.pack.auction_period_millis==50UL );
 
   /* Ensure we can selectively override a field */
 

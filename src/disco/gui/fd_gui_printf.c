@@ -550,7 +550,7 @@ fd_gui_printf_schedule_strategy( fd_gui_t * gui ) {
     switch (gui->summary.schedule_strategy) {
       case 0: strncpy( mode, "perf", sizeof(mode) ); break;
       case 1: strncpy( mode, "balanced", sizeof(mode) ); break;
-      case 2: strncpy( mode, "revenue", sizeof(mode) ); break;
+      case 2: strncpy( mode, "arawn", sizeof(mode) ); break;
       default: FD_LOG_ERR(("unexpected schedule_strategy %d", gui->summary.schedule_strategy));
     }
     mode[ sizeof(mode) - 1] = '\0';

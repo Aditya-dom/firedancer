@@ -621,13 +621,14 @@ scheduler. The following modes are possible:
 
 - "perf"
 - "balanced"
-- "revenue"
+- "arawn"
 
 The scheduler mode determines how eager / greedy the scheduler is when
 filling a block.  "perf" means the scheduler tries to fill the block as
-quickly as possible while "revenue" means the scheduler will wait as
-long as possible before filling the block. "balanced" is somewhere in
-the middle.
+quickly as possible, while "balanced" paces scheduling through the slot.
+"arawn" uses frequent batch auctions, where votes and bundles remain
+eligible for immediate scheduling but non-vote, non-bundled transactions
+are scheduled during periodic auctions.
 
 ::: details Example
 
@@ -635,7 +636,7 @@ the middle.
 {
     "topic": "summary",
     "key": "schedule_strategy",
-    "value": "balanced"
+    "value": "arawn"
 }
 ```
 

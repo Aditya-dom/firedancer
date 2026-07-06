@@ -443,6 +443,7 @@ struct fd_config {
       int   use_consumed_cus;
       char  schedule_strategy[ 16 ];
       int   schedule_strategy_enum;
+      ulong auction_period_millis;
       ulong account_blocklist_cnt;
       char  account_blocklist[ FD_PACK_ACCT_BLOCKLIST_MAX ][ FD_BASE58_ENCODED_32_SZ ];
     } pack;
