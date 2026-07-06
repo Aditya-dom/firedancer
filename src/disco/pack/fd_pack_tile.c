@@ -554,6 +554,19 @@ before_credit( fd_pack_ctx_t *     ctx,
   }
 }
 
+static inline ulong
+fd_pack_tile_arrival_auction_id( fd_pack_ctx_t * ctx,
+                                 long            now ) {
+  ulong arrival_auction_id = fd_pack_current_auction( ctx->pack );
+  if( FD_UNLIKELY( (ctx->strategy==FD_PACK_STRATEGY_ARAWN) & (ctx->leader_slot!=ULONG_MAX) ) ) {
+    arrival_auction_id = fd_pack_arawn_live_auction_id( arrival_auction_id,
+                                                         now,
+                                                         ctx->next_arawn_auction_tick,
+                                                         ctx->arawn_auction_period_ticks );
+  }
+  return arrival_auction_id;
+}
+
 #if FD_PACK_USE_EXTRA_STORAGE
 /* insert_from_extra: helper method to pop the transaction at the head
    off the extra txn deque and insert it into pack.  Requires that
@@ -574,10 +587,11 @@ insert_from_extra( fd_pack_ctx_t * ctx ) {
   extra_txn_deq_remove_head( ctx->extra_txn_deq );
 
   ulong blockhash_slot = insert->txnp->blockhash_slot;
+  ulong arrival_auction_id = fd_pack_tile_arrival_auction_id( ctx, fd_tickcount() );
 
   ulong deleted;
   long insert_duration = -fd_tickcount();
-  int result = fd_pack_insert_txn_fini( ctx->pack, spot, blockhash_slot, &deleted );
+  int result = fd_pack_insert_txn_fini_with_arawn_auction( ctx->pack, spot, blockhash_slot, arrival_auction_id, &deleted );
   insert_duration      += fd_tickcount();
 
   FD_MCNT_INC( PACK, TXN_DELETED, deleted );
@@ -1237,9 +1251,10 @@ after_frag( fd_pack_ctx_t *     ctx,
       }
     } else {
       ulong blockhash_slot = sig;
+      ulong arrival_auction_id = fd_pack_tile_arrival_auction_id( ctx, now );
       ulong deleted;
       long insert_duration = -fd_tickcount();
-      int result = fd_pack_insert_txn_fini( ctx->pack, ctx->cur_spot, blockhash_slot, &deleted );
+      int result = fd_pack_insert_txn_fini_with_arawn_auction( ctx->pack, ctx->cur_spot, blockhash_slot, arrival_auction_id, &deleted );
       insert_duration      += fd_tickcount();
       FD_MCNT_INC( PACK, TXN_DELETED, deleted );
       ctx->insert_result[ result + FD_PACK_INSERT_RETVAL_OFF ]++;

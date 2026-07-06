@@ -611,6 +611,10 @@ FD_STATIC_ASSERT( FD_PACK_INSERT_ACCEPT_NONCE_NONVOTE_REPLACE<FD_PACK_INSERT_RET
    codes explained above.
  */
 fd_txn_e_t * fd_pack_insert_txn_init  ( fd_pack_t * pack                                                         );
+/* fd_pack_insert_txn_fini_with_arawn_auction is like _fini but lets the
+   caller stamp the Arawn arrival auction explicitly. */
+int          fd_pack_insert_txn_fini_with_arawn_auction( fd_pack_t * pack, fd_txn_e_t * txn, ulong expires_at,
+                                                          ulong arrival_auction_id, ulong * delete_cnt );
 int          fd_pack_insert_txn_fini  ( fd_pack_t * pack, fd_txn_e_t * txn, ulong expires_at, ulong * delete_cnt );
 void         fd_pack_insert_txn_cancel( fd_pack_t * pack, fd_txn_e_t * txn                                       );
 

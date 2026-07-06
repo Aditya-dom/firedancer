@@ -1345,10 +1345,11 @@ populate_bitsets( fd_pack_t         * pack,
 }
 
 int
-fd_pack_insert_txn_fini( fd_pack_t  * pack,
-                         fd_txn_e_t * txne,
-                         ulong        expires_at,
-                         ulong      * delete_cnt ) {
+fd_pack_insert_txn_fini_with_arawn_auction( fd_pack_t  * pack,
+                                            fd_txn_e_t * txne,
+                                            ulong        expires_at,
+                                            ulong        arrival_auction_id,
+                                            ulong      * delete_cnt ) {
   *delete_cnt = 0UL;
 
   fd_pack_ord_txn_t * ord = (fd_pack_ord_txn_t *)txne;
@@ -1410,7 +1411,7 @@ fd_pack_insert_txn_fini( fd_pack_t  * pack,
   /* At this point, we know we have space to insert the transaction and
      we've committed to insert it. */
   ord->arrival_seq        = fd_pack_arawn_state_next_arrival_seq( pack->arawn_state );
-  ord->arrival_auction_id = fd_pack_arawn_state_current_auction( pack->arawn_state );
+  ord->arrival_auction_id = arrival_auction_id;
   ord->candidate_kind     = FD_PACK_ARAWN_CANDIDATE_TXN;
 
   /* Since the pool uses ushorts, the size of the pool is < USHORT_MAX.
@@ -1461,6 +1462,18 @@ fd_pack_insert_txn_fini( fd_pack_t  * pack,
 
   treap_ele_insert( insert_into, ord, pack->pool );
   return (is_vote) | (replaces<<1) | (is_durable_nonce<<2);
+}
+
+int
+fd_pack_insert_txn_fini( fd_pack_t  * pack,
+                         fd_txn_e_t * txne,
+                         ulong        expires_at,
+                         ulong      * delete_cnt ) {
+  return fd_pack_insert_txn_fini_with_arawn_auction( pack,
+                                                     txne,
+                                                     expires_at,
+                                                     fd_pack_arawn_state_current_auction( pack->arawn_state ),
+                                                     delete_cnt );
 }
 #undef REJECT
 
@@ -1914,6 +1927,10 @@ fd_pack_schedule_impl( fd_pack_t          * pack,
 
   ulong min_cus   = ULONG_MAX;
   ulong min_bytes = ULONG_MAX;
+  /* Only regular non-vote txns are sealed to the next auction. */
+  int use_arawn_sealed_eligibility = (fd_pack_arawn_state_strategy( pack->arawn_state )==FD_PACK_STRATEGY_ARAWN_BATCH) &
+                                     (sched_from==pack->pending);
+  ulong current_auction_id = fd_pack_arawn_state_current_auction( pack->arawn_state );
 
   if( FD_UNLIKELY( (cu_limit<smallest_in_treap->cus) | (txn_limit==0UL) | (byte_limit<smallest_in_treap->bytes) ) ) {
     sched_return_t to_return = { .cus_scheduled = 0UL, .txns_scheduled = 0UL, .bytes_scheduled = 0UL };
@@ -1933,6 +1950,8 @@ fd_pack_schedule_impl( fd_pack_t          * pack,
 
     min_cus   = fd_ulong_min( min_cus,   cur->compute_est     );
     min_bytes = fd_ulong_min( min_bytes, cur->txn->payload_sz );
+
+    if( FD_UNLIKELY( use_arawn_sealed_eligibility && current_auction_id<=cur->arrival_auction_id ) ) continue;
 
     ulong conflicts = 0UL;
 

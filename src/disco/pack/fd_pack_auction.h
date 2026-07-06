@@ -23,7 +23,7 @@ fd_pack_arawn_config_from_tile( fd_pack_arawn_config_t * cfg,
   cfg->auction_period_us = 1000UL * auction_period_millis;
 }
 
-static inline ulong
+FD_FN_PURE static inline ulong
 fd_pack_arawn_auction_periods_elapsed( long now,
                                        long next_auction_tick,
                                        long auction_period_ticks ) {
@@ -33,6 +33,16 @@ fd_pack_arawn_auction_periods_elapsed( long now,
   ulong elapsed_ticks = (ulong)(now - next_auction_tick);
   ulong period_ticks  = (ulong)auction_period_ticks;
   return elapsed_ticks / period_ticks + 1UL;
+}
+
+FD_FN_PURE static inline ulong
+fd_pack_arawn_live_auction_id( ulong current_auction_id,
+                               long  now,
+                               long  next_auction_tick,
+                               long  auction_period_ticks ) {
+  ulong elapsed_auctions = fd_pack_arawn_auction_periods_elapsed( now, next_auction_tick, auction_period_ticks );
+  ulong live_auction_id  = current_auction_id + elapsed_auctions;
+  return fd_ulong_if( live_auction_id<current_auction_id, ULONG_MAX, live_auction_id );
 }
 
 static inline long

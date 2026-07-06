@@ -1,5 +1,6 @@
 #include "../../ballet/fd_ballet.h"
 #include "fd_pack.h"
+#include "fd_pack_auction.h"
 #include "fd_pack_cost.h"
 #include "fd_compute_budget_program.h"
 #include "../../ballet/txn/fd_txn.h"
@@ -372,6 +373,36 @@ insert( ulong       i,
   return insert1( &txnp_scratch[ i ], i, pack );
 }
 
+static int
+insert_with_arawn_auction1( fd_txn_p_t * txnp,
+                            ulong        expires_at,
+                            fd_pack_t *  pack,
+                            ulong        arrival_auction_id ) {
+  fd_txn_e_t * slot = fd_pack_insert_txn_init( pack );
+  memcpy( slot->txnp, txnp, sizeof(fd_txn_p_t) );
+  ulong deleted = 0UL;
+  return fd_pack_insert_txn_fini_with_arawn_auction( pack, slot, expires_at, arrival_auction_id, &deleted );
+}
+
+static int
+insert_with_arawn_auction( ulong       i,
+                           fd_pack_t * pack,
+                           ulong       arrival_auction_id ) {
+  return insert_with_arawn_auction1( &txnp_scratch[ i ], i, pack, arrival_auction_id );
+}
+
+static void
+set_schedule_strategy( fd_pack_t * pack,
+                       int         schedule_strategy ) {
+  fd_pack_arawn_config_t cfg[ 1 ];
+  fd_pack_arawn_config_t const * opt_cfg = NULL;
+  if( FD_UNLIKELY( schedule_strategy==FD_PACK_STRATEGY_ARAWN ) ) {
+    fd_pack_arawn_config_from_tile( cfg, 50UL );
+    opt_cfg = cfg;
+  }
+  fd_pack_set_strategy( pack, fd_pack_strategy_mode_from_schedule_strategy( schedule_strategy ), opt_cfg );
+}
+
 static void
 schedule_validate_microblock( fd_pack_t * pack,
                               ulong total_cus,
@@ -546,6 +577,158 @@ void test_vote( void ) {
   FD_TEST( fd_pack_avail_txn_cnt( pack ) == 0UL );
 
   for( ulong j=0UL; j<3UL; j++ ) FD_TEST( outcome.results[ j ].txnp->flags==FD_TXN_P_FLAGS_IS_SIMPLE_VOTE );
+  FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
+}
+
+void test_arawn_blocks_current_epoch_normal_txns( void ) {
+  FD_LOG_NOTICE(( "TEST ARAWN CURRENT EPOCH BLOCK" ));
+  fd_pack_t * pack = init_all( 128UL, 1UL, 4UL, &outcome );
+  set_schedule_strategy( pack, FD_PACK_STRATEGY_ARAWN );
+
+  FD_TEST( fd_pack_advance_auction( pack, 1UL ) );
+
+  make_transaction( 0UL, 500U, 500U, 10.0, "A", "B", NULL, NULL );
+  FD_TEST( insert( 0UL, pack )>=0 );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==1UL );
+
+  ulong scheduled = fd_pack_schedule_next_microblock( pack,
+                                                      FD_PACK_TEST_MAX_COST_PER_BLOCK,
+                                                      0.0f,
+                                                      0UL,
+                                                      FD_PACK_SCHEDULE_TXN,
+                                                      outcome.results );
+  FD_TEST( scheduled==0UL );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==1UL );
+  FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
+}
+
+void test_arawn_allows_prior_epoch_normal_txns( void ) {
+  FD_LOG_NOTICE(( "TEST ARAWN PRIOR EPOCH ALLOW" ));
+  fd_pack_t * pack = init_all( 128UL, 1UL, 4UL, &outcome );
+  set_schedule_strategy( pack, FD_PACK_STRATEGY_ARAWN );
+
+  FD_TEST( fd_pack_advance_auction( pack, 1UL ) );
+
+  make_transaction( 0UL, 500U, 500U, 10.0, "A", "B", NULL, NULL );
+  FD_TEST( insert( 0UL, pack )>=0 );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==1UL );
+
+  FD_TEST( fd_pack_advance_auction( pack, 2UL ) );
+
+  ulong scheduled = fd_pack_schedule_next_microblock( pack,
+                                                      FD_PACK_TEST_MAX_COST_PER_BLOCK,
+                                                      0.0f,
+                                                      0UL,
+                                                      FD_PACK_SCHEDULE_TXN,
+                                                      outcome.results );
+  FD_TEST( scheduled==1UL );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==0UL );
+  FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
+}
+
+void test_arawn_votes_bypass_sealed_normal_txn_eligibility( void ) {
+  FD_LOG_NOTICE(( "TEST ARAWN VOTE BYPASS" ));
+  fd_pack_t * pack = init_all( 128UL, 1UL, 4UL, &outcome );
+  set_schedule_strategy( pack, FD_PACK_STRATEGY_ARAWN );
+
+  FD_TEST( fd_pack_advance_auction( pack, 1UL ) );
+
+  make_vote_transaction( 0UL );
+  FD_TEST( insert( 0UL, pack )>=0 );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==1UL );
+
+  ulong scheduled = fd_pack_schedule_next_microblock( pack,
+                                                      FD_PACK_MAX_SIMPLE_VOTE_COST,
+                                                      1.0f,
+                                                      0UL,
+                                                      FD_PACK_SCHEDULE_VOTE,
+                                                      outcome.results );
+  FD_TEST( scheduled==1UL );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==0UL );
+  FD_TEST( outcome.results[ 0 ].txnp->flags & FD_TXN_P_FLAGS_IS_SIMPLE_VOTE );
+  FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
+}
+
+void test_legacy_strategy_schedules_as_before( void ) {
+  FD_LOG_NOTICE(( "TEST LEGACY STRATEGY UNCHANGED" ));
+  fd_pack_t * pack = init_all( 128UL, 1UL, 4UL, &outcome );
+  set_schedule_strategy( pack, FD_PACK_STRATEGY_PERF );
+
+  FD_TEST( fd_pack_advance_auction( pack, 1UL ) );
+
+  make_transaction( 0UL, 500U, 500U, 10.0, "A", "B", NULL, NULL );
+  FD_TEST( insert( 0UL, pack )>=0 );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==1UL );
+
+  ulong scheduled = fd_pack_schedule_next_microblock( pack,
+                                                      FD_PACK_TEST_MAX_COST_PER_BLOCK,
+                                                      0.0f,
+                                                      0UL,
+                                                      FD_PACK_SCHEDULE_TXN,
+                                                      outcome.results );
+  FD_TEST( scheduled==1UL );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==0UL );
+  FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
+}
+
+void test_arawn_skipped_auctions_preserve_sealed_arrival( void ) {
+  FD_LOG_NOTICE(( "TEST ARAWN SKIPPED AUCTION ELIGIBILITY" ));
+  fd_pack_t * pack = init_all( 128UL, 1UL, 4UL, &outcome );
+  set_schedule_strategy( pack, FD_PACK_STRATEGY_ARAWN );
+
+  long  next_auction_tick = 1000L;
+  ulong auction_bank_mask = 0UL;
+  long  now               = 1120L;
+
+  ulong arrival_auction_id = fd_pack_arawn_live_auction_id( fd_pack_current_auction( pack ),
+                                                            now,
+                                                            next_auction_tick,
+                                                            50L );
+  FD_TEST( arrival_auction_id==3UL );
+
+  make_transaction( 0UL, 500U, 500U, 10.0, "A", "B", NULL, NULL );
+  FD_TEST( insert_with_arawn_auction( 0UL, pack, arrival_auction_id )>=0 );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==1UL );
+
+  int flags = fd_pack_schedule_flags_for_strategy_with_pack( pack,
+                                                             FD_PACK_STRATEGY_ARAWN,
+                                                             0,
+                                                             1,
+                                                             now,
+                                                             &next_auction_tick,
+                                                             &auction_bank_mask,
+                                                             50L );
+  FD_TEST( flags & FD_PACK_SCHEDULE_TXN );
+  FD_TEST( fd_pack_current_auction( pack )==3UL );
+  FD_TEST( next_auction_tick==1150L );
+  FD_TEST( auction_bank_mask==1UL );
+  FD_TEST( fd_pack_schedule_next_microblock( pack,
+                                             FD_PACK_TEST_MAX_COST_PER_BLOCK,
+                                             0.0f,
+                                             0UL,
+                                             flags,
+                                             outcome.results )==0UL );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==1UL );
+
+  flags = fd_pack_schedule_flags_for_strategy_with_pack( pack,
+                                                         FD_PACK_STRATEGY_ARAWN,
+                                                         0,
+                                                         1,
+                                                         1150L,
+                                                         &next_auction_tick,
+                                                         &auction_bank_mask,
+                                                         50L );
+  FD_TEST( flags & FD_PACK_SCHEDULE_TXN );
+  FD_TEST( fd_pack_current_auction( pack )==4UL );
+  FD_TEST( next_auction_tick==1200L );
+  FD_TEST( auction_bank_mask==1UL );
+  FD_TEST( fd_pack_schedule_next_microblock( pack,
+                                             FD_PACK_TEST_MAX_COST_PER_BLOCK,
+                                             0.0f,
+                                             0UL,
+                                             flags,
+                                             outcome.results )==1UL );
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==0UL );
   FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
 }
 
@@ -1730,6 +1913,11 @@ main( int     argc,
   test1();
   test2();
   test_vote();
+  test_arawn_blocks_current_epoch_normal_txns();
+  test_arawn_allows_prior_epoch_normal_txns();
+  test_arawn_votes_bypass_sealed_normal_txn_eligibility();
+  test_legacy_strategy_schedules_as_before();
+  test_arawn_skipped_auctions_preserve_sealed_arrival();
   heap_overflow_test();
   test_delete();
   test_expiration();
