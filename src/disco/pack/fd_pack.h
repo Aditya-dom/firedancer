@@ -395,6 +395,11 @@ fd_pack_avail_txn_cnt( fd_pack_t const * pack ) {
   return *((ulong const *)((uchar const *)pack + FD_PACK_PENDING_TXN_CNT_OFF));
 }
 
+/* fd_pack_pending_normal_txn_cnt returns the number of pending
+   non-vote, non-bundle transactions, including any transactions held
+   in penalty treaps.  pack must be a valid local join. */
+FD_FN_PURE ulong fd_pack_pending_normal_txn_cnt( fd_pack_t const * pack );
+
 /* fd_pack_current_block_cost returns the number of CUs that have been
    scheduled in the current block, net of any rebates.  It should be
    between 0 and the specified value of max_cost_per_block, but it can

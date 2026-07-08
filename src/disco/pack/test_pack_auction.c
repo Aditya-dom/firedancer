@@ -136,6 +136,24 @@ test_arawn_pack_config_preserves_explicit_fields( void ) {
 }
 
 static void
+test_arawn_effective_period_uses_base_below_threshold( void ) {
+  FD_TEST( fd_pack_arawn_effective_auction_period_ticks_from_backlog( 7UL, 2UL, 80L )==80L );
+}
+
+static void
+test_arawn_effective_period_halves_at_medium_backlog( void ) {
+  FD_TEST( fd_pack_arawn_effective_auction_period_ticks_from_backlog( 8UL, 2UL, 80L )==40L );
+  FD_TEST( fd_pack_arawn_effective_auction_period_ticks_from_backlog( 15UL, 2UL, 80L )==40L );
+}
+
+static void
+test_arawn_effective_period_quarters_at_heavy_backlog( void ) {
+  FD_TEST( fd_pack_arawn_effective_auction_period_ticks_from_backlog(  8UL, 1UL, 50L )==13L );
+  FD_TEST( fd_pack_arawn_effective_auction_period_ticks_from_backlog( 16UL, 2UL, 80L )==20L );
+  FD_TEST( fd_pack_arawn_effective_auction_period_ticks_from_backlog( 32UL, 4UL, 80L )==20L );
+}
+
+static void
 test_arawn_pack_state_advances_monotonically( void ) {
   fd_pack_arawn_state_t state[1];
   fd_pack_arawn_state_init( state, 4096UL );
@@ -472,6 +490,9 @@ main( int     argc,
   test_arawn_pack_config_defaults();
   test_arawn_pack_config_normalizes_zero_fields();
   test_arawn_pack_config_preserves_explicit_fields();
+  test_arawn_effective_period_uses_base_below_threshold();
+  test_arawn_effective_period_halves_at_medium_backlog();
+  test_arawn_effective_period_quarters_at_heavy_backlog();
   test_arawn_pack_state_advances_monotonically();
   test_arawn_pack_state_assigns_arrival_sequences();
   test_arawn_blocks_txns_before_auction();

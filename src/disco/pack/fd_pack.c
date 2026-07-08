@@ -1873,7 +1873,8 @@ fd_pack_metrics_write( fd_pack_t const * pack ) {
   ulong pending_regular = treap_ele_cnt( pack->pending        );
   ulong pending_votes  = treap_ele_cnt( pack->pending_votes   );
   ulong pending_bundle = treap_ele_cnt( pack->pending_bundles );
-  ulong conflicting    = pack->pending_txn_cnt - pending_votes - pending_bundle - treap_ele_cnt( pack->pending );
+  ulong pending_normal = fd_pack_pending_normal_txn_cnt( pack );
+  ulong conflicting    = pending_normal - pending_regular;
   FD_MGAUGE_SET( PACK, TXN_AVAILABLE_ALL,         pack->pending_txn_cnt       );
   FD_MGAUGE_SET( PACK, TXN_AVAILABLE_REGULAR,     pending_regular             );
   FD_MGAUGE_SET( PACK, TXN_AVAILABLE_VOTES,       pending_votes               );
@@ -2793,6 +2794,13 @@ fd_pack_schedule_next_microblock( fd_pack_t *  pack,
 #endif
 
   return scheduled;
+}
+
+ulong
+fd_pack_pending_normal_txn_cnt( fd_pack_t const * pack ) {
+  ulong pending_votes  = treap_ele_cnt( pack->pending_votes   );
+  ulong pending_bundle = treap_ele_cnt( pack->pending_bundles );
+  return pack->pending_txn_cnt - pending_votes - pending_bundle;
 }
 
 ulong fd_pack_bank_tile_cnt     ( fd_pack_t const * pack ) { return pack->bank_tile_cnt;         }

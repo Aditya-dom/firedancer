@@ -561,10 +561,10 @@ fd_pack_tile_arrival_auction_id( fd_pack_ctx_t * ctx,
                                  long            now ) {
   ulong arrival_auction_id = fd_pack_current_auction( ctx->pack );
   if( FD_UNLIKELY( (ctx->strategy==FD_PACK_STRATEGY_ARAWN) & (ctx->leader_slot!=ULONG_MAX) ) ) {
-    arrival_auction_id = fd_pack_arawn_live_auction_id( arrival_auction_id,
-                                                         now,
-                                                         ctx->next_arawn_auction_tick,
-                                                         ctx->arawn_auction_period_ticks );
+    arrival_auction_id = fd_pack_arawn_live_auction_id_with_pack( ctx->pack,
+                                                                  now,
+                                                                  ctx->next_arawn_auction_tick,
+                                                                  ctx->arawn_auction_period_ticks );
   }
   return arrival_auction_id;
 }

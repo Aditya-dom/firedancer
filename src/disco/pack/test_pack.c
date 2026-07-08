@@ -649,6 +649,81 @@ void test_arawn_votes_bypass_sealed_normal_txn_eligibility( void ) {
   FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
 }
 
+void test_pending_normal_txn_cnt_tracks_penalty_votes_and_bundles( void ) {
+  FD_LOG_NOTICE(( "TEST PENDING NORMAL COUNT" ));
+  fd_pack_t * pack = init_all( 128UL, 2UL, 16UL, &outcome );
+  fd_pack_set_initializer_bundles_ready( pack );
+
+  ulong i = 0UL;
+  for( ; i<70UL; i++ ) {
+    make_transaction( i, 500U, 500U, 10.0, "A", "B", NULL, NULL );
+    FD_TEST( insert( i, pack )>=0 );
+  }
+
+  for( ulong j=0UL; j<3UL; j++, i++ ) {
+    make_vote_transaction( i );
+    FD_TEST( insert( i, pack )>=0 );
+  }
+
+  fd_txn_e_t * _bundle[ 2 ];
+  ulong deleted = 0UL;
+  fd_txn_e_t * const * bundle = fd_pack_insert_bundle_init( pack, _bundle, 2UL );
+  make_transaction1( bundle[ 0 ]->txnp, i++, 500U, 500U, 12.0, "C", "D", NULL, NULL );
+  make_transaction1( bundle[ 1 ]->txnp, i++, 500U, 500U, 11.0, "E", "F", NULL, NULL );
+  FD_TEST( fd_pack_insert_bundle_fini( pack, bundle, 2UL, 1000UL, 0, NULL, &deleted )>=0 );
+
+  FD_TEST( fd_pack_avail_txn_cnt( pack )==75UL );
+  FD_TEST( fd_pack_pending_normal_txn_cnt( pack )==70UL );
+  FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
+}
+
+void test_arawn_backlog_accelerates_schedule_auction_cadence( void ) {
+  FD_LOG_NOTICE(( "TEST ARAWN ADAPTIVE SCHEDULE CADENCE" ));
+  fd_pack_t * pack = init_all( 128UL, 2UL, 16UL, &outcome );
+  set_schedule_strategy( pack, FD_PACK_STRATEGY_ARAWN );
+
+  for( ulong i=0UL; i<8UL; i++ ) {
+    make_transaction( i, 500U, 500U, 10.0, "A", "B", NULL, NULL );
+    FD_TEST( insert( i, pack )>=0 );
+  }
+
+  long  next_auction_tick = 1000L;
+  ulong auction_bank_mask = 0UL;
+  int flags = fd_pack_schedule_flags_for_strategy_with_pack( pack,
+                                                             FD_PACK_STRATEGY_ARAWN,
+                                                             0,
+                                                             1,
+                                                             1025L,
+                                                             &next_auction_tick,
+                                                             &auction_bank_mask,
+                                                             50L );
+  FD_TEST( flags & FD_PACK_SCHEDULE_VOTE      );
+  FD_TEST( !(flags & FD_PACK_SCHEDULE_BUNDLE) );
+  FD_TEST( flags & FD_PACK_SCHEDULE_TXN       );
+  FD_TEST( fd_pack_current_auction( pack )==2UL );
+  FD_TEST( next_auction_tick==1050L );
+  FD_TEST( auction_bank_mask==1UL );
+  FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
+}
+
+void test_arawn_backlog_accelerates_arrival_auction_ids( void ) {
+  FD_LOG_NOTICE(( "TEST ARAWN ADAPTIVE ARRIVAL AUCTION" ));
+  fd_pack_t * pack = init_all( 128UL, 2UL, 16UL, &outcome );
+  set_schedule_strategy( pack, FD_PACK_STRATEGY_ARAWN );
+
+  for( ulong i=0UL; i<16UL; i++ ) {
+    make_transaction( i, 500U, 500U, 10.0, "A", "B", NULL, NULL );
+    FD_TEST( insert( i, pack )>=0 );
+  }
+
+  ulong arrival_auction_id = fd_pack_arawn_live_auction_id_with_pack( pack,
+                                                                       1059L,
+                                                                       1000L,
+                                                                       80L );
+  FD_TEST( arrival_auction_id==3UL );
+  FD_TEST( !fd_pack_verify( pack, pack_verify_scratch ) );
+}
+
 void test_legacy_strategy_schedules_as_before( void ) {
   FD_LOG_NOTICE(( "TEST LEGACY STRATEGY UNCHANGED" ));
   fd_pack_t * pack = init_all( 128UL, 1UL, 4UL, &outcome );
@@ -1916,6 +1991,9 @@ main( int     argc,
   test_arawn_blocks_current_epoch_normal_txns();
   test_arawn_allows_prior_epoch_normal_txns();
   test_arawn_votes_bypass_sealed_normal_txn_eligibility();
+  test_pending_normal_txn_cnt_tracks_penalty_votes_and_bundles();
+  test_arawn_backlog_accelerates_schedule_auction_cadence();
+  test_arawn_backlog_accelerates_arrival_auction_ids();
   test_legacy_strategy_schedules_as_before();
   test_arawn_skipped_auctions_preserve_sealed_arrival();
   heap_overflow_test();

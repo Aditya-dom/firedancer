@@ -24,6 +24,34 @@ fd_pack_arawn_config_from_tile( fd_pack_arawn_config_t * cfg,
 }
 
 FD_FN_PURE static inline ulong
+fd_pack_arawn_effective_auction_period_divisor( ulong pending_normal_txn_cnt,
+                                                ulong bank_cnt ) {
+  bank_cnt = fd_ulong_max( bank_cnt, 1UL );
+  if( FD_UNLIKELY( pending_normal_txn_cnt>=8UL*bank_cnt ) ) return 4UL;
+  if( FD_UNLIKELY( pending_normal_txn_cnt>=4UL*bank_cnt ) ) return 2UL;
+  return 1UL;
+}
+
+FD_FN_PURE static inline long
+fd_pack_arawn_effective_auction_period_ticks_from_backlog( ulong pending_normal_txn_cnt,
+                                                           ulong bank_cnt,
+                                                           long  auction_period_ticks ) {
+  if( FD_UNLIKELY( auction_period_ticks<=0L ) ) return auction_period_ticks;
+
+  ulong divisor = fd_pack_arawn_effective_auction_period_divisor( pending_normal_txn_cnt, bank_cnt );
+  ulong base_ticks = (ulong)auction_period_ticks;
+  return (long)fd_ulong_max( (base_ticks + divisor - 1UL)/divisor, 1UL );
+}
+
+FD_FN_PURE static inline long
+fd_pack_arawn_effective_auction_period_ticks( fd_pack_t const * pack,
+                                              long              auction_period_ticks ) {
+  return fd_pack_arawn_effective_auction_period_ticks_from_backlog( fd_pack_pending_normal_txn_cnt( pack ),
+                                                                    fd_pack_bank_tile_cnt( pack ),
+                                                                    auction_period_ticks );
+}
+
+FD_FN_PURE static inline ulong
 fd_pack_arawn_auction_periods_elapsed( long now,
                                        long next_auction_tick,
                                        long auction_period_ticks ) {
@@ -43,6 +71,17 @@ fd_pack_arawn_live_auction_id( ulong current_auction_id,
   ulong elapsed_auctions = fd_pack_arawn_auction_periods_elapsed( now, next_auction_tick, auction_period_ticks );
   ulong live_auction_id  = current_auction_id + elapsed_auctions;
   return fd_ulong_if( live_auction_id<current_auction_id, ULONG_MAX, live_auction_id );
+}
+
+FD_FN_PURE static inline ulong
+fd_pack_arawn_live_auction_id_with_pack( fd_pack_t const * pack,
+                                         long              now,
+                                         long              next_auction_tick,
+                                         long              auction_period_ticks ) {
+  return fd_pack_arawn_live_auction_id( fd_pack_current_auction( pack ),
+                                        now,
+                                        next_auction_tick,
+                                        fd_pack_arawn_effective_auction_period_ticks( pack, auction_period_ticks ) );
 }
 
 static inline long
@@ -151,11 +190,12 @@ fd_pack_schedule_flags_for_strategy_with_pack( fd_pack_t * pack,
   }
 
   ulong opened_auction_cnt = 0UL;
+  long effective_auction_period_ticks = fd_pack_arawn_effective_auction_period_ticks( pack, auction_period_ticks );
   int allow_txn = fd_pack_arawn_txn_allowed_ext( now,
                                                  bank_idx,
                                                  next_auction_tick,
                                                  auction_bank_mask,
-                                                 auction_period_ticks,
+                                                 effective_auction_period_ticks,
                                                  &opened_auction_cnt );
   if( FD_UNLIKELY( opened_auction_cnt ) ) {
     ulong current_auction = fd_pack_current_auction( pack );
